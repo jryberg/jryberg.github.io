@@ -1,8 +1,8 @@
 baseURL: "https://jryberg.github.io"
 languageCode: "en-us"
 title: "Memos"
-theme: "m10c"
+theme: "ace-documentation"
 params:
-  avatar: static/avatar.png
+  avatar: "./avatar.png"
   author: "Johan Ryberg"
   description: "Useful notes for me"
