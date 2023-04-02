@@ -1,6 +1,6 @@
 baseURL: "https://securit.se"
 languageCode: "en-us"
-title: "Memos"
+title: "securit.se"
 theme: "hugo-geekdoc"
 params:
   avatar: "./avatar.png"
