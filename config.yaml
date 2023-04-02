@@ -1,8 +1,29 @@
 baseURL: "https://jryberg.github.io"
 languageCode: "en-us"
 title: "Memos"
-theme: "ace-documentation"
+theme: "hugo-geekdoc"
 params:
   avatar: "./avatar.png"
   author: "Johan Ryberg"
   description: "Useful notes for me"
+pluralizeListTitles: false
+
+# Geekdoc required configuration
+pygmentsUseClasses: true
+pygmentsCodeFences: true
+disablePathToLower: true
+
+# Required if you want to render robots.txt template
+enableRobotsTXT: true
+
+# Needed for mermaid shortcodes
+markup:
+  markup.goldmark.renderer:
+    # Needed for mermaid shortcode
+    unsafe: true
+  markup.tableOfContents:
+    startLevel: 1
+    endLevel: 9
+
+taxonomies:
+  tag: "tags"
