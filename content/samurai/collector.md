@@ -172,9 +172,11 @@ The specifications varies between CTS - Enhanced and CTS - Standard. Please refe
 ### Supported operating systems
 * Ubuntu Server 22.04 LTS (x86_64): https://ubuntu.com/download/server
 
-#### Depricated
+{{< hint type=important >}}
+**Deprecation warning**\
 Still supported for existing deployments but no new installations will be allowed
-* CentOS7 7 minimal (x86_64): http://isoredirect.centos.org/centos/7/isos/x86_64/)
+* CentOS7 7 minimal (x86_64): http://isoredirect.centos.org/centos/7/isos/x86_64/
+{{< /hint >}}
 
 ### OS installation
 Install OS using default settings except for:
