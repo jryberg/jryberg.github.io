@@ -18,10 +18,11 @@ enableRobotsTXT: true
 
 # Needed for mermaid shortcodes
 markup:
-  markup.goldmark.renderer:
-    # Needed for mermaid shortcode
-    unsafe: true
-  markup.tableOfContents:
+  goldmark:
+    renderer:
+      # Needed for mermaid shortcode
+      unsafe: true
+  tableOfContents:
     startLevel: 1
     endLevel: 9
 
