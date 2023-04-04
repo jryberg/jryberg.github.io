@@ -186,7 +186,7 @@ Check doc folder in this project and configure your monitoring interface accordi
 
 ### Install the CTS
 Issue the following command and follow the guide. Once completed the CTS is ready.
-```console
+```Shell
 wget -q -O install.sh https://git.io/JZmVM && sudo bash ./install.sh
 ```
 
