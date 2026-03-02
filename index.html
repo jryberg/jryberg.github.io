@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>guest@securit:~$</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace; font-size: 14px; overflow: hidden; }
+#terminal { height: 100%; padding: 12px; overflow-y: auto; cursor: text; }
+#terminal::-webkit-scrollbar { width: 8px; }
+#terminal::-webkit-scrollbar-track { background: #1a1a1a; }
+#terminal::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+.line { white-space: pre-wrap; word-wrap: break-word; line-height: 1.4; }
+.prompt-user { color: #57c457; }
+.prompt-sep { color: #d4d4d4; }
+.prompt-path { color: #5f87d7; }
+.prompt-dollar { color: #d4d4d4; }
+#input-line { line-height: 1.4; white-space: pre; }
+#input { position: absolute; left: -9999px; opacity: 0; }
+#typed { color: #d4d4d4; }
+.dir-name { color: #5f87d7; font-weight: bold; }
+#cursor { display: inline-block; width: 8px; height: 1.2em; background: #d4d4d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; }
+@keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script>
+(function() {
+  'use strict';
+
+  // Virtual filesystem
+  var fs = {
+    '/': { type: 'dir', children: ['home', 'etc', 'usr', 'var', 'tmp'] },
+    '/home': { type: 'dir', children: ['guest'] },
+    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'Documents'] },
+    '/home/guest/contact.txt': { type: 'file', content: 'johan@ryberg.se\n' },
+    '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n' },
+    '/home/guest/Documents': { type: 'dir', children: [] },
+    '/etc': { type: 'dir', restricted: true },
+    '/usr': { type: 'dir', restricted: true },
+    '/var': { type: 'dir', restricted: true },
+    '/tmp': { type: 'dir', restricted: true }
+  };
+
+  var cwd = '/home/guest';
+  var prevDir = cwd;
+  var history = [];
+  var historyIndex = -1;
+  var terminal = document.getElementById('terminal');
+
+  function escapeHTML(str) {
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function resolvePath(p) {
+    if (!p || p === '~') return '/home/guest';
+    if (p === '-') return prevDir;
+    if (p.startsWith('~/')) p = '/home/guest/' + p.slice(2);
+    if (!p.startsWith('/')) p = cwd + '/' + p;
+    var parts = p.split('/').filter(Boolean);
+    var resolved = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '.') continue;
+      else if (parts[i] === '..') { if (resolved.length) resolved.pop(); }
+      else resolved.push(parts[i]);
+    }
+    return '/' + resolved.join('/') || '/';
+  }
+
+  function getDisplayPath() {
+    if (cwd === '/home/guest') return '~';
+    if (cwd.startsWith('/home/guest/')) return '~/' + cwd.slice(12);
+    return cwd;
+  }
+
+  function buildPrompt() {
+    var span = document.createElement('span');
+    var user = document.createElement('span');
+    user.className = 'prompt-user';
+    user.textContent = 'guest@securit';
+    var sep = document.createElement('span');
+    sep.className = 'prompt-sep';
+    sep.textContent = ':';
+    var path = document.createElement('span');
+    path.className = 'prompt-path';
+    path.textContent = getDisplayPath();
+    var dollar = document.createElement('span');
+    dollar.className = 'prompt-dollar';
+    dollar.textContent = '$ ';
+    span.appendChild(user);
+    span.appendChild(sep);
+    span.appendChild(path);
+    span.appendChild(dollar);
+    return span;
+  }
+
+  function addLine(text) {
+    var div = document.createElement('div');
+    div.className = 'line';
+    div.textContent = text;
+    terminal.insertBefore(div, inputLine);
+  }
+
+  function addLineWithDirName(prefix, name) {
+    var div = document.createElement('div');
+    div.className = 'line';
+    if (prefix) div.appendChild(document.createTextNode(prefix));
+    var span = document.createElement('span');
+    span.className = 'dir-name';
+    span.textContent = name;
+    div.appendChild(span);
+    terminal.insertBefore(div, inputLine);
+  }
+
+  function addCommandLine(cmdText) {
+    var div = document.createElement('div');
+    div.className = 'line';
+    div.appendChild(buildPrompt());
+    var textNode = document.createTextNode(cmdText);
+    div.appendChild(textNode);
+    terminal.insertBefore(div, inputLine);
+  }
+
+  function scrollToBottom() {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  function isRestricted(path) {
+    var entry = fs[path];
+    if (entry && entry.restricted) return true;
+    var parts = path.split('/').filter(Boolean);
+    for (var i = 1; i <= parts.length; i++) {
+      var parent = '/' + parts.slice(0, i).join('/');
+      if (fs[parent] && fs[parent].restricted) return true;
+    }
+    return false;
+  }
+
+  function formatDate(d) {
+    var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var day = days[d.getDay()];
+    var month = months[d.getMonth()];
+    var date = d.getDate().toString();
+    if (date.length === 1) date = ' ' + date;
+    var h = d.getHours().toString().padStart(2, '0');
+    var m = d.getMinutes().toString().padStart(2, '0');
+    var s = d.getSeconds().toString().padStart(2, '0');
+    return day + ' ' + month + ' ' + date + ' ' + h + ':' + m + ':' + s + ' ' + d.getFullYear();
+  }
+
+  var commands = {
+    ls: function(args) {
+      var showAll = false;
+      var showLong = false;
+      var target = null;
+      for (var i = 0; i < args.length; i++) {
+        if (args[i] === '-a' || args[i] === '-la' || args[i] === '-al') showAll = true;
+        if (args[i] === '-l' || args[i] === '-la' || args[i] === '-al') showLong = true;
+        if (!args[i].startsWith('-')) target = args[i];
+      }
+      var path = target ? resolvePath(target) : cwd;
+      if (isRestricted(path)) { addLine('ls: cannot open directory \'' + (target || '.') + '\': Permission denied'); return; }
+      var entry = fs[path];
+      if (!entry) { addLine('ls: cannot access \'' + (target || '.') + '\': No such file or directory'); return; }
+      if (entry.type === 'file') {
+        if (showLong) {
+          addLine('-rw-r--r-- 1 guest guest ' + entry.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + path.split('/').pop());
+        } else {
+          addLine(path.split('/').pop());
+        }
+        return;
+      }
+      var items = entry.children.slice();
+      if (showAll) items = ['.', '..'].concat(items);
+      else items = items.filter(function(n) { return !n.startsWith('.'); });
+      if (showLong) {
+        if (showAll) addLine('total ' + items.length);
+        items.forEach(function(name) {
+          var childPath = (path === '/' ? '' : path) + '/' + name;
+          var child = fs[childPath];
+          var isDir = name === '.' || name === '..' || (child && child.type === 'dir');
+          if (isDir) {
+            addLineWithDirName('drwxr-xr-x 2 guest guest 4096 Mar  1 12:00 ', name);
+          } else if (child && child.type === 'file') {
+            addLine('-rw-r--r-- 1 guest guest ' + child.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + name);
+          }
+        });
+      } else {
+        if (!items.length) return;
+        var div = document.createElement('div');
+        div.className = 'line';
+        items.forEach(function(name, idx) {
+          if (idx > 0) div.appendChild(document.createTextNode('  '));
+          var childPath = (path === '/' ? '' : path) + '/' + name;
+          var child = fs[childPath];
+          var isDir = name === '.' || name === '..' || (child && child.type === 'dir');
+          if (isDir) {
+            var span = document.createElement('span');
+            span.className = 'dir-name';
+            span.textContent = name;
+            div.appendChild(span);
+          } else {
+            div.appendChild(document.createTextNode(name));
+          }
+        });
+        terminal.insertBefore(div, inputLine);
+      }
+    },
+    cat: function(args) {
+      if (!args.length) { addLine('cat: missing operand'); return; }
+      var path = resolvePath(args[0]);
+      if (isRestricted(path)) { addLine('cat: ' + args[0] + ': Permission denied'); return; }
+      var entry = fs[path];
+      if (!entry) { addLine('cat: ' + args[0] + ': No such file or directory'); return; }
+      if (entry.type === 'dir') { addLine('cat: ' + args[0] + ': Is a directory'); return; }
+      var lines = entry.content.replace(/\n$/, '').split('\n');
+      lines.forEach(function(l) { addLine(l); });
+    },
+    cd: function(args) {
+      var target = args[0] || '~';
+      var path = resolvePath(target);
+      if (isRestricted(path)) { addLine('-bash: cd: ' + target + ': Permission denied'); return; }
+      var entry = fs[path];
+      if (!entry) { addLine('-bash: cd: ' + target + ': No such file or directory'); return; }
+      if (entry.type !== 'dir') { addLine('-bash: cd: ' + target + ': Not a directory'); return; }
+      prevDir = cwd;
+      cwd = path;
+    },
+    pwd: function() { addLine(cwd); },
+    whoami: function() { addLine('guest'); },
+    hostname: function() { addLine('securit'); },
+    id: function() { addLine('uid=1000(guest) gid=1000(guest) groups=1000(guest)'); },
+    uname: function(args) {
+      if (args.indexOf('-a') !== -1) {
+        addLine('Linux securit 6.1.0-27-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.115-1 (2024-11-01) x86_64 GNU/Linux');
+      } else {
+        addLine('Linux');
+      }
+    },
+    clear: function() {
+      var lines = terminal.querySelectorAll('.line');
+      for (var i = 0; i < lines.length; i++) lines[i].remove();
+    },
+    help: function() {
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, help, exit');
+    },
+    echo: function(args) { addLine(args.join(' ')); },
+    date: function() { addLine(formatDate(new Date())); },
+    history: function() {
+      history.forEach(function(cmd, i) {
+        addLine('  ' + (i + 1).toString().padStart(4) + '  ' + cmd);
+      });
+    },
+    exit: function() { addLine('logout'); addLine('Connection to securit.se closed.'); input.disabled = true; cursor.style.display = 'none'; },
+    sudo: function() { addLine('[sudo] password for guest: '); addLine('guest is not in the sudoers file. This incident will be reported.'); },
+    su: function() { addLine('Password: '); addLine('su: Authentication failure'); }
+  };
+
+  var denied = ['rm', 'mv', 'cp', 'mkdir', 'touch', 'chmod', 'chown', 'chgrp', 'dd', 'mkfs', 'mount', 'umount'];
+
+  function execute(line) {
+    var trimmed = line.trim();
+    if (!trimmed) return;
+    history.push(trimmed);
+    historyIndex = history.length;
+    var parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    var cmd = parts[0];
+    var args = parts.slice(1).map(function(a) {
+      if ((a.startsWith('"') && a.endsWith('"')) || (a.startsWith("'") && a.endsWith("'"))) return a.slice(1, -1);
+      return a;
+    });
+    if (commands[cmd]) {
+      commands[cmd](args);
+    } else if (denied.indexOf(cmd) !== -1) {
+      addLine('-bash: ' + cmd + ': Permission denied');
+    } else {
+      addLine('-bash: ' + cmd + ': command not found');
+    }
+  }
+
+  // Build input line
+  var inputLine = document.createElement('div');
+  inputLine.id = 'input-line';
+  var promptSpan = document.createElement('span');
+  promptSpan.appendChild(buildPrompt().cloneNode(true));
+  var input = document.createElement('input');
+  input.id = 'input';
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.autocapitalize = 'off';
+  input.spellcheck = false;
+  var typed = document.createElement('span');
+  typed.id = 'typed';
+  var cursor = document.createElement('span');
+  cursor.id = 'cursor';
+  inputLine.appendChild(promptSpan);
+  inputLine.appendChild(input);
+  inputLine.appendChild(typed);
+  inputLine.appendChild(cursor);
+
+  // Append input line first so addLine can insertBefore it
+  terminal.appendChild(inputLine);
+
+  // Welcome banner
+  var now = new Date();
+  var loginDate = new Date(now.getTime() - 300000);
+  addLine('Last login: ' + formatDate(loginDate) + ' from 192.168.1.42');
+
+  function updatePrompt() {
+    promptSpan.textContent = '';
+    promptSpan.appendChild(buildPrompt());
+  }
+
+  function syncTyped() {
+    typed.textContent = input.value;
+  }
+
+  var cmdNames = Object.keys(commands).concat(denied);
+
+  function tabComplete(value) {
+    var parts = value.split(/\s+/);
+    var isFirst = parts.length <= 1;
+    var partial = parts[parts.length - 1] || '';
+
+    if (isFirst) {
+      // Complete command names
+      var matches = cmdNames.filter(function(c) { return c.startsWith(partial); });
+      return { matches: matches, prefix: partial, isPath: false };
+    }
+
+    // Complete file/dir names
+    var dirPath, namePrefix;
+    var lastSlash = partial.lastIndexOf('/');
+    if (lastSlash !== -1) {
+      var dirPart = partial.substring(0, lastSlash) || '/';
+      dirPath = resolvePath(dirPart);
+      namePrefix = partial.substring(lastSlash + 1);
+    } else {
+      dirPath = cwd;
+      namePrefix = partial;
+    }
+
+    var dir = fs[dirPath];
+    if (!dir || dir.type !== 'dir' || dir.restricted) return { matches: [], prefix: partial, isPath: true };
+
+    var matches = dir.children.filter(function(c) { return c.startsWith(namePrefix); });
+    return { matches: matches, prefix: namePrefix, isPath: true, dirPath: dirPath, lastSlash: lastSlash, partial: partial };
+  }
+
+  function applyCompletion(value, result) {
+    if (result.matches.length === 0) return value;
+    var parts = value.split(/\s+/);
+
+    var completed;
+    if (result.matches.length === 1) {
+      completed = result.matches[0];
+      // Add trailing slash for directories, space for files/commands
+      if (result.isPath) {
+        var fullPath = (result.dirPath === '/' ? '' : result.dirPath) + '/' + completed;
+        var entry = fs[fullPath];
+        if (entry && entry.type === 'dir') completed += '/';
+        else completed += ' ';
+      } else {
+        completed += ' ';
+      }
+    } else {
+      // Fill common prefix
+      var common = result.matches[0];
+      for (var i = 1; i < result.matches.length; i++) {
+        while (result.matches[i].indexOf(common) !== 0) {
+          common = common.substring(0, common.length - 1);
+        }
+      }
+      completed = common;
+    }
+
+    if (result.isPath && result.lastSlash !== -1) {
+      completed = result.partial.substring(0, result.lastSlash + 1) + completed;
+    }
+
+    parts[parts.length - 1] = completed;
+    return parts.join(' ');
+  }
+
+  terminal.addEventListener('click', function() { input.focus(); });
+
+  input.addEventListener('input', syncTyped);
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      var val = input.value;
+      addCommandLine(val);
+      input.value = '';
+      syncTyped();
+      execute(val);
+      updatePrompt();
+      scrollToBottom();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (historyIndex > 0) { historyIndex--; input.value = history[historyIndex]; syncTyped(); }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIndex < history.length - 1) { historyIndex++; input.value = history[historyIndex]; syncTyped(); }
+      else { historyIndex = history.length; input.value = ''; syncTyped(); }
+    } else if (e.key === 'c' && e.ctrlKey) {
+      e.preventDefault();
+      addCommandLine(input.value + '^C');
+      input.value = '';
+      syncTyped();
+      historyIndex = history.length;
+      scrollToBottom();
+    } else if (e.key === 'l' && e.ctrlKey) {
+      e.preventDefault();
+      commands.clear();
+      scrollToBottom();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      var result = tabComplete(input.value);
+      if (result.matches.length === 1) {
+        input.value = applyCompletion(input.value, result);
+        syncTyped();
+      } else if (result.matches.length > 1) {
+        // Show matches and fill common prefix
+        addCommandLine(input.value);
+        addLine(result.matches.join('  '));
+        input.value = applyCompletion(input.value, result);
+        syncTyped();
+        scrollToBottom();
+      }
+    }
+  });
+
+  input.focus();
+  window.addEventListener('focus', function() { input.focus(); });
+})();
+</script>
+</body>
+</html>
