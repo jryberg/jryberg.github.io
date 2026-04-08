@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Garden Clock</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#0e1a0e;
+    min-height:100vh; display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    font-family:Georgia,serif; gap:.8rem;
+  }
+  h1 { color:#c8a96e; font-size:1.5rem; font-style:italic;
+       letter-spacing:.12em; text-shadow:0 2px 10px rgba(0,0,0,.8); }
+  canvas { display:block; filter:drop-shadow(0 22px 65px rgba(0,0,0,.9)); }
+  .leg { display:flex; gap:2.5rem; font-style:italic; font-size:.82rem; color:#7a9a6a; }
+  .h::before { content:'● '; color:#c05828; }
+  .m::before { content:'● '; color:#2a8a40; }
+</style>
+</head>
+<body>
+<h1>The Garden Clock</h1>
+<canvas id="c"></canvas>
+<div class="leg"><span class="h">Hours</span><span class="m">Minutes</span></div>
+
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+const SZ=Math.min(window.innerWidth*.9,window.innerHeight*.82,620);
+canvas.width=canvas.height=SZ;
+const cx=SZ/2, cy=SZ/2, R=SZ/2-28;
+
+// ── Deterministic pseudo-random (no flicker on static scene) ─────────────────
+function dr(s){const x=Math.sin(s*127.1+311.7)*43758.5453;return x-Math.floor(x);}
+
+// ── Leaf atlas ────────────────────────────────────────────────────────────────
+const LEAF_COLS=['#a86a28','#c08830','#8a5a1e','#b07c28','#986020',
+                 '#7a8830','#8aaa38','#9ab030','#6a8820','#b09828','#c8a030','#788830'];
+const AW=12,AH=5;
+const ATLAS=[];
+(function(){
+  LEAF_COLS.forEach(col=>{
+    const lc=document.createElement('canvas'); lc.width=AW; lc.height=AH;
+    const x=lc.getContext('2d'),w=AW,h=AH;
+    x.beginPath();
+    x.moveTo(w*.5,.4); x.bezierCurveTo(w*.8,.4,w-.4,h*.27,w-.4,h*.5);
+    x.bezierCurveTo(w-.4,h*.73,w*.8,h-.4,w*.5,h-.4);
+    x.bezierCurveTo(w*.2,h-.4,.4,h*.73,.4,h*.5);
+    x.bezierCurveTo(.4,h*.27,w*.2,.4,w*.5,.4);
+    x.closePath(); x.fillStyle=col; x.fill();
+    const gr=x.createLinearGradient(0,0,w,h);
+    gr.addColorStop(0,'rgba(255,255,255,.25)'); gr.addColorStop(.5,'rgba(255,255,255,.04)');
+    gr.addColorStop(1,'rgba(0,0,0,.20)'); x.fillStyle=gr; x.fill();
+    x.strokeStyle='rgba(0,0,0,.28)'; x.lineWidth=.45;
+    x.beginPath(); x.moveTo(1,h/2); x.lineTo(w-1,h/2); x.stroke();
+    ATLAS.push(lc);
+  });
+})();
+
+function gauss(σ){const u=Math.random()||1e-10,v=Math.random();return σ*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+function shadeCol(hex,a){const n=parseInt(hex.replace('#',''),16);return`rgb(${Math.min(255,Math.max(0,(n>>16)+a))},${Math.min(255,Math.max(0,((n>>8)&0xff)+a))},${Math.min(255,Math.max(0,(n&0xff)+a))})`;}
+
+function mkLeaf(idx,total,angle,hR){
+  const t=(idx+.5)/total, σp=.5+.7*Math.sin(t*Math.PI), perp=angle+Math.PI/2, pOff=gauss(σp);
+  return{ x:Math.cos(angle)*t*hR+gauss(1.8)*Math.cos(angle)+pOff*Math.cos(perp),
+          y:Math.sin(angle)*t*hR+gauss(1.8)*Math.sin(angle)+pOff*Math.sin(perp),
+          vx:0,vy:0,ang:Math.random()*Math.PI,angV:0,
+          ti:Math.floor(Math.random()*ATLAS.length), sc:.42+Math.random()*.30,
+          t, pOff:gauss(.35) };
+}
+
+const PAL={
+  h:{skin:'#f4c186',shirt:'#b83018',pants:'#3a1e08',hair:'#261206',broom:'#9a7030'},
+  m:{skin:'#f4c186',shirt:'#186038',pants:'#243520',hair:'#3a2010',broom:'#7a5828'},
+};
+
+const BF_FRAC=0.22, BRUSH_R=6;
+
+function mkMan(pal,speed,innerR,outerR,startFrac,phaseOff){
+  return{ pal,speed,innerR,outerR,
+          rPos:innerR+(outerR-innerR)*startFrac,
+          rDir:startFrac<.5?1:-1,
+          θ:0,facing:0,x:0,y:0,
+          sweepPhase:phaseOff, sweepSpd:.46, sweepRange:10, brushR:BRUSH_R };
+}
+
+const HOUR_N=5500,MIN_N=5500;
+let hL,mL,hMen,mMen,prevTs=0;
+const GC=22,GW=Math.ceil(SZ/GC)+1,GH=Math.ceil(SZ/GC)+1;
+function mkGrid(){return Array.from({length:GW*GH},()=>[]);}
+let hGrid=mkGrid(),mGrid=mkGrid();
+function fillGrid(g,leaves){
+  for(let i=0;i<g.length;i++)g[i].length=0;
+  leaves.forEach(lf=>{const gx=((cx+lf.x)/GC)|0,gy=((cy+lf.y)/GC)|0;if(gx>=0&&gx<GW&&gy>=0&&gy<GH)g[gy*GW+gx].push(lf);});
+}
+function near(g,wx,wy,r){
+  const gx0=(wx/GC)|0,gy0=(wy/GC)|0,s=(r/GC+1.5)|0,out=[];
+  for(let dy=-s;dy<=s;dy++)for(let dx=-s;dx<=s;dx++){const nx=gx0+dx,ny=gy0+dy;if(nx>=0&&nx<GW&&ny>=0&&ny<GH){const c=g[ny*GW+nx];for(let i=0;i<c.length;i++)out.push(c[i]);}}
+  return out;
+}
+function getAngles(){
+  const d=new Date(),h=d.getHours()%12,m=d.getMinutes(),s=d.getSeconds(),ms=d.getMilliseconds();
+  return{hA:((h*3600+m*60+s+ms/1000)/43200)*2*Math.PI-Math.PI/2,
+         mA:((m*60+s+ms/1000)/3600)*2*Math.PI-Math.PI/2};
+}
+function leafTarget(lf,a,hR){const p=a+Math.PI/2;return{x:Math.cos(a)*lf.t*hR+Math.cos(p)*lf.pOff,y:Math.sin(a)*lf.t*hR+Math.sin(p)*lf.pOff};}
+
+function init(){
+  const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
+  hL=Array.from({length:HOUR_N},(_,i)=>mkLeaf(i,HOUR_N,hA,hR));
+  mL=Array.from({length:MIN_N}, (_,i)=>mkLeaf(i,MIN_N, mA,mR));
+  hMen=[ mkMan(PAL.h,12,hR*.04,hR*.96,0.0,0) ];
+  mMen=[ mkMan(PAL.m,18,mR*.04,mR*.52,0.0,0), mkMan(PAL.m,18,mR*.48,mR*.96,1.0,Math.PI) ];
+}
+
+const K_S=3.0,VDRAG=4.0,ADRAG=5.0,WALL=R*.882;
+function stepLeaves(leaves,a,hR,dt){
+  const vdf=Math.exp(-VDRAG*dt),adf=Math.exp(-ADRAG*dt);
+  for(let i=0;i<leaves.length;i++){
+    const lf=leaves[i];
+    if(Math.hypot(lf.vx,lf.vy)<0.22&&Math.abs(lf.angV)<0.12){lf.vx=0;lf.vy=0;lf.angV=0;continue;}
+    const tg=leafTarget(lf,a,hR); const ddx=tg.x-lf.x,ddy=tg.y-lf.y;
+    lf.vx+=ddx*K_S*dt; lf.vy+=ddy*K_S*dt;
+    lf.vx*=vdf; lf.vy*=vdf; lf.angV*=adf;
+    lf.x+=lf.vx*dt; lf.y+=lf.vy*dt; lf.ang+=lf.angV*dt;
+    if(Math.hypot(lf.vx,lf.vy)<0.3&&Math.hypot(ddx,ddy)<1.4){lf.x=tg.x;lf.y=tg.y;lf.vx=0;lf.vy=0;lf.angV=0;}
+    const r=Math.hypot(lf.x,lf.y);
+    if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;const dot=lf.vx*nx+lf.vy*ny;if(dot>0){lf.vx-=1.6*dot*nx;lf.vy-=1.6*dot*ny;}lf.angV+=(Math.random()-.5)*9;}
+  }
+}
+
+function stepMan(man,grid,leaves,handAngle,hR,dt){
+  man.rPos+=man.rDir*man.speed*dt;
+  if(man.rPos>=man.outerR){man.rPos=man.outerR;man.rDir=-1;}
+  if(man.rPos<=man.innerR){man.rPos=man.innerR;man.rDir=+1;}
+  man.θ=handAngle-BF_FRAC;
+  man.x=Math.cos(man.θ)*man.rPos; man.y=Math.sin(man.θ)*man.rPos;
+  man.facing=man.θ+Math.PI/2;
+  const bFwd=BF_FRAC*man.rPos;
+  man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
+  const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
+  const fwdX=-Math.sin(man.θ),fwdY=Math.cos(man.θ),radX=Math.cos(man.θ),radY=Math.sin(man.θ);
+  const brX=man.x+fwdX*bFwd+radX*sweepT*man.sweepRange;
+  const brY=man.y+fwdY*bFwd+radY*sweepT*man.sweepRange;
+  const cands=near(grid,cx+brX,cy+brY,man.brushR);
+  for(let i=0;i<cands.length;i++){
+    const lf=cands[i];const dx=lf.x-brX,dy=lf.y-brY,d=Math.hypot(dx,dy);
+    if(d>=man.brushR)continue;
+    const str=60*(1-d/man.brushR);
+    const tg=leafTarget(lf,handAngle,hR);const tdx=tg.x-lf.x,tdy=tg.y-lf.y,td=Math.hypot(tdx,tdy)||1;
+    lf.vx+=(tdx/td)*str*.80+radX*(Math.random()-.5)*str*.20;
+    lf.vy+=(tdy/td)*str*.80+radY*(Math.random()-.5)*str*.20;
+    lf.angV+=(Math.random()-.5)*22;
+  }
+}
+
+// ── Pre-rendered static background ───────────────────────────────────────────
+let bgCanvas=null;
+
+function buildBush(bc,bx,by,size,seed){
+  // Shadow
+  bc.beginPath(); bc.ellipse(bx+4,by+5,size,size*.8,dr(seed)*Math.PI,0,Math.PI*2);
+  bc.fillStyle='rgba(0,0,0,.32)'; bc.fill();
+  // Lobes
+  const nl=4+Math.floor(dr(seed+1)*5);
+  for(let k=0;k<nl;k++){
+    const ka=dr(seed+k*7+2)*Math.PI*2, ks=size*(0.52+dr(seed+k*7+3)*.50);
+    const kx=bx+Math.cos(ka)*size*.32, ky=by+Math.sin(ka)*size*.32;
+    const hue=105+dr(seed+k*7+4)*28, sat=48+dr(seed+k*7+5)*22, lit=18+dr(seed+k*7+6)*16;
+    bc.beginPath(); bc.arc(kx,ky,ks,0,Math.PI*2);
+    bc.fillStyle=`hsl(${hue},${sat}%,${lit}%)`; bc.fill();
+  }
+  // Highlight blob
+  bc.beginPath(); bc.arc(bx-size*.22,by-size*.25,size*.38,0,Math.PI*2);
+  bc.fillStyle='rgba(120,210,60,.10)'; bc.fill();
+}
+
+function buildBg(){
+  bgCanvas=document.createElement('canvas');
+  bgCanvas.width=SZ; bgCanvas.height=SZ;
+  const bc=bgCanvas.getContext('2d');
+
+  // ── 1. Grass ground (entire canvas) ────────────────────────────────────────
+  const gGrd=bc.createRadialGradient(cx,cy,R*.5,cx,cy,SZ*.78);
+  gGrd.addColorStop(0,'#305a28'); gGrd.addColorStop(.5,'#285022'); gGrd.addColorStop(1,'#1c3818');
+  bc.fillStyle=gGrd; bc.fillRect(0,0,SZ,SZ);
+
+  // Subtle grass noise texture
+  for(let y=0;y<SZ;y+=3) for(let x=0;x<SZ;x+=3){
+    if(dr(x*1000+y)>.62) continue;
+    const d=Math.hypot(x-cx,y-cy);
+    if(d<R+38||d>SZ*.5) continue;
+    bc.fillStyle=`rgba(${Math.floor(dr(x+y*97)*30)},${40+Math.floor(dr(x*3+y)*30)},${Math.floor(dr(x*5+y)*20)},.06)`;
+    bc.fillRect(x,y,3,3);
+  }
+
+  // ── 2. Grass tufts in garden ───────────────────────────────────────────────
+  for(let i=0;i<420;i++){
+    const dist=R+52+dr(i*7+1)*(SZ/2-R-65);
+    const ang=dr(i*7+2)*Math.PI*2;
+    const gx=cx+Math.cos(ang)*dist, gy=cy+Math.sin(ang)*dist;
+    if(gx<3||gx>SZ-3||gy<3||gy>SZ-3) continue;
+    bc.save(); bc.translate(gx,gy);
+    const nb=2+Math.floor(dr(i*7+3)*3);
+    for(let b=0;b<nb;b++){
+      const ba=-Math.PI/2+(dr(i*7+4+b)-.5)*1.3;
+      const bh=4+dr(i*7+5+b)*7;
+      bc.strokeStyle=`hsl(${105+dr(i*7+6)*25},${50+dr(i*7+7)*22}%,${26+dr(i*7+8)*18}%)`;
+      bc.lineWidth=1.1+dr(i*7+9)*.8; bc.lineCap='round';
+      bc.beginPath(); bc.moveTo(0,0);
+      bc.quadraticCurveTo(Math.sin(ba)*bh*.4,-bh*.55,Math.sin(ba)*bh*.7,-bh); bc.stroke();
+    }
+    bc.restore();
+  }
+
+  // ── 3. Small pebbles scattered in garden ──────────────────────────────────
+  for(let i=0;i<80;i++){
+    const dist=R+55+dr(i*11+1)*(SZ/2-R-68);
+    const ang=dr(i*11+2)*Math.PI*2;
+    const px=cx+Math.cos(ang)*dist, py=cy+Math.sin(ang)*dist;
+    if(px<2||px>SZ-2||py<2||py>SZ-2) continue;
+    const pr=1.4+dr(i*11+3)*2.8;
+    bc.save(); bc.translate(px,py); bc.rotate(dr(i*11+4)*Math.PI);
+    bc.beginPath(); bc.ellipse(1,1,pr+1,pr*.7,0,0,Math.PI*2);
+    bc.fillStyle='rgba(0,0,0,.25)'; bc.fill();
+    bc.beginPath(); bc.ellipse(0,0,pr,pr*.75,0,0,Math.PI*2);
+    const ph=35+dr(i*11+5)*20;
+    bc.fillStyle=`hsl(${ph},${8+dr(i*11+6)*10}%,${48+dr(i*11+7)*22}%)`; bc.fill();
+    bc.beginPath(); bc.ellipse(-pr*.2,-pr*.2,pr*.38,pr*.26,-.4,0,Math.PI*2);
+    bc.fillStyle='rgba(255,255,255,.18)'; bc.fill();
+    bc.restore();
+  }
+
+  // ── 4. Wild flowers ────────────────────────────────────────────────────────
+  const FC=['#f5e840','#ffffff','#ff8ab4','#c866e0','#ff7044','#80ddff','#ffaa22'];
+  for(let i=0;i<100;i++){
+    const dist=R+55+dr(i*13+1)*(SZ/2-R-70);
+    const ang=dr(i*13+2)*Math.PI*2;
+    const fx=cx+Math.cos(ang)*dist, fy=cy+Math.sin(ang)*dist;
+    if(fx<4||fx>SZ-4||fy<4||fy>SZ-4) continue;
+    const fc=FC[Math.floor(dr(i*13+3)*FC.length)];
+    const np=4+Math.floor(dr(i*13+4)*4);
+    const pr=1.6+dr(i*13+5)*1.8;
+    // Stem
+    bc.beginPath(); bc.moveTo(fx,fy); bc.lineTo(fx,fy+4+dr(i*13+6)*4);
+    bc.strokeStyle='rgba(50,100,30,.7)'; bc.lineWidth=1; bc.stroke();
+    // Petals
+    for(let p=0;p<np;p++){
+      const pa=(p/np)*Math.PI*2+dr(i*13+7)*.5;
+      bc.beginPath(); bc.ellipse(fx+Math.cos(pa)*pr*1.6,fy+Math.sin(pa)*pr*1.6,pr,pr*.58,pa,0,Math.PI*2);
+      bc.fillStyle=fc; bc.fill();
+    }
+    // Center
+    bc.beginPath(); bc.arc(fx,fy,pr*.72,0,Math.PI*2);
+    bc.fillStyle=dr(i*13+8)>.5?'#e8a020':'#ffe040'; bc.fill();
+  }
+
+  // ── 5. Lush bushes framing the stone ring ─────────────────────────────────
+  // Larger background shrubs first
+  for(let i=0;i<12;i++){
+    const ang=(i/12)*Math.PI*2+dr(i*5+1)*.4;
+    const dist=R+62+dr(i*5+2)*22;
+    const bx=cx+Math.cos(ang)*dist, by=cy+Math.sin(ang)*dist;
+    const bs=18+dr(i*5+3)*20;
+    if(bx-bs<1||bx+bs>SZ-1||by-bs<1||by+bs>SZ-1) buildBush(bc,bx,by,bs,i*200+50);
+    else buildBush(bc,bx,by,bs,i*200+50);
+  }
+  // Smaller foreground shrubs closer to stone ring
+  for(let i=0;i<16;i++){
+    const ang=(i/16)*Math.PI*2+dr(i*5+91)*.35;
+    const dist=R+46+dr(i*5+92)*12;
+    const bx=cx+Math.cos(ang)*dist, by=cy+Math.sin(ang)*dist;
+    const bs=10+dr(i*5+93)*10;
+    buildBush(bc,bx,by,bs,i*300+150);
+  }
+
+  // ── 6. Stone circle ring ──────────────────────────────────────────────────
+  const numStones=14;
+  const ri=R+5, ro=R+42;
+  const cov=0.74, halfFull=Math.PI/numStones, halfStone=halfFull*cov;
+  const stoneR=(ri+ro)/2;
+
+  for(let i=0;i<numStones;i++){
+    const ba=(i/numStones)*Math.PI*2;
+    const a1=ba-halfStone, a2=ba+halfStone;
+    const s1=dr(i*9+1),s2=dr(i*9+2),s3=dr(i*9+3),s4=dr(i*9+4),s5=dr(i*9+5);
+
+    // Shadow
+    bc.save(); bc.translate(3,4);
+    bc.beginPath(); bc.arc(cx,cy,ro+2,a1,a2); bc.arc(cx,cy,ri-2,a2,a1,true); bc.closePath();
+    bc.fillStyle='rgba(0,0,0,.28)'; bc.fill();
+    bc.restore();
+
+    // Stone face
+    bc.beginPath(); bc.arc(cx,cy,ro,a1,a2); bc.arc(cx,cy,ri,a2,a1,true); bc.closePath();
+    const mx=cx+Math.cos(ba)*stoneR, my=cy+Math.sin(ba)*stoneR;
+    const sg=bc.createLinearGradient(mx-28,my-22,mx+22,my+28);
+    const hue=38+s1*18, sat=8+s2*9, l1=72+s3*14, l2=50+s3*10;
+    sg.addColorStop(0,`hsl(${hue},${sat}%,${l1}%)`);
+    sg.addColorStop(.55,`hsl(${hue},${sat+3}%,${(l1+l2)/2}%)`);
+    sg.addColorStop(1,`hsl(${hue},${sat+5}%,${l2}%)`);
+    bc.fillStyle=sg; bc.fill();
+    bc.strokeStyle=`hsl(${hue},${sat+2}%,${l2-14}%)`; bc.lineWidth=1.8; bc.stroke();
+
+    // Inner rim highlight
+    bc.beginPath(); bc.arc(cx,cy,ri+4,a1+.025,a2-.025);
+    bc.strokeStyle='rgba(255,255,255,.20)'; bc.lineWidth=3.5; bc.stroke();
+
+    // Outer rim shadow
+    bc.beginPath(); bc.arc(cx,cy,ro-4,a1+.015,a2-.015);
+    bc.strokeStyle='rgba(0,0,0,.12)'; bc.lineWidth=3; bc.stroke();
+
+    // Crack texture
+    bc.save();
+    bc.beginPath(); bc.arc(cx,cy,ro,a1,a2); bc.arc(cx,cy,ri,a2,a1,true); bc.closePath(); bc.clip();
+    for(let c=0;c<2;c++){
+      const cA=a1+(a2-a1)*dr(i*9+6+c);
+      const cR1=ri+(ro-ri)*dr(i*9+8+c)*.4, cR2=cR1+(ro-ri)*.55;
+      bc.beginPath();
+      bc.moveTo(cx+Math.cos(cA)*cR1,cy+Math.sin(cA)*cR1);
+      bc.lineTo(cx+Math.cos(cA+.02)*cR2,cy+Math.sin(cA+.02)*cR2);
+      bc.strokeStyle='rgba(60,50,40,.12)'; bc.lineWidth=1.2; bc.stroke();
+    }
+    bc.restore();
+
+    // Moss patches
+    if(s1>.52){
+      bc.save();
+      bc.beginPath(); bc.arc(cx,cy,ro,a1,a2); bc.arc(cx,cy,ri,a2,a1,true); bc.closePath(); bc.clip();
+      const mA=a1+(a2-a1)*(.2+s2*.6), mR=ri+(ro-ri)*(.2+s3*.6);
+      bc.beginPath(); bc.arc(cx+Math.cos(mA)*mR,cy+Math.sin(mA)*mR,5+s4*6,0,Math.PI*2);
+      bc.fillStyle=`rgba(55,108,38,${.28+s5*.25})`; bc.fill();
+      if(s5>.5){
+        const m2A=a1+(a2-a1)*(.55+s5*.3), m2R=ri+(ro-ri)*(.5+s1*.3);
+        bc.beginPath(); bc.arc(cx+Math.cos(m2A)*m2R,cy+Math.sin(m2A)*m2R,3+s1*3.5,0,Math.PI*2);
+        bc.fillStyle=`rgba(60,115,42,.25)`; bc.fill();
+      }
+      bc.restore();
+    }
+  }
+
+  // Ground visible in gaps between stones (slightly darker)
+  for(let i=0;i<numStones;i++){
+    const ba=(i/numStones)*Math.PI*2+halfFull;
+    const a1=ba-halfFull*(1-cov)/2, a2=ba+halfFull*(1-cov)/2;
+    bc.beginPath(); bc.arc(cx,cy,ro+3,a1,a2); bc.arc(cx,cy,ri-3,a2,a1,true); bc.closePath();
+    bc.fillStyle='rgba(12,20,10,.55)'; bc.fill();
+  }
+
+  // ── 7. Clock face (inside stone ring) ────────────────────────────────────
+  // Face shadow ring
+  bc.beginPath(); bc.arc(cx,cy,R+2,0,Math.PI*2);
+  bc.fillStyle='rgba(0,0,0,.22)'; bc.fill();
+
+  // Main parchment stone face
+  const face=bc.createRadialGradient(cx-R*.15,cy-R*.18,0,cx,cy,R);
+  face.addColorStop(0,'#f0e8d0'); face.addColorStop(.55,'#e8dfc5'); face.addColorStop(1,'#d2c9b2');
+  bc.beginPath(); bc.arc(cx,cy,R,0,Math.PI*2); bc.fillStyle=face; bc.fill();
+
+  // Subtle stone texture on face
+  bc.save(); bc.beginPath(); bc.arc(cx,cy,R,0,Math.PI*2); bc.clip();
+  for(let i=0;i<12;i++){
+    const a=dr(i*3)*Math.PI*2, r1=dr(i*3+1)*R*.9, r2=r1+dr(i*3+2)*R*.1;
+    bc.beginPath(); bc.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);
+    bc.lineTo(cx+Math.cos(a+.03)*r2,cy+Math.sin(a+.03)*r2);
+    bc.strokeStyle='rgba(130,110,80,.04)'; bc.lineWidth=10; bc.stroke();
+  }
+  bc.restore();
+
+  // Face edge ring (stone rim inner bevel)
+  bc.beginPath(); bc.arc(cx,cy,R,0,Math.PI*2);
+  bc.strokeStyle='rgba(100,85,65,.22)'; bc.lineWidth=4; bc.stroke();
+  bc.beginPath(); bc.arc(cx,cy,R-3,0,Math.PI*2);
+  bc.strokeStyle='rgba(255,245,225,.18)'; bc.lineWidth=2; bc.stroke();
+
+  // Grass fringe (between stone ring and clock face edge)
+  bc.save(); bc.beginPath(); bc.arc(cx,cy,R,0,Math.PI*2); bc.clip();
+  for(let i=0;i<90;i++){
+    const a=(i/90)*Math.PI*2, gr=R*.872+Math.sin(i*13.1)*4;
+    bc.save(); bc.translate(cx+Math.cos(a)*gr,cy+Math.sin(a)*gr); bc.rotate(a+Math.PI/2);
+    const h=7+Math.sin(i*9.3+1)*3;
+    bc.beginPath(); bc.moveTo(0,0);
+    bc.bezierCurveTo(-2,-h*.35,-1.5,-h*.75,0,-h); bc.bezierCurveTo(1.5,-h*.75,2,-h*.35,0,0);
+    bc.fillStyle=['#265424','#36703a','#2e6030','#3e7832'][i%4]; bc.fill(); bc.restore();
+  }
+  bc.restore();
+
+  // ── 8. Hour markers on clock face ─────────────────────────────────────────
+  for(let i=1;i<=12;i++){
+    const a=(i/12)*Math.PI*2-Math.PI/2, mr=R*.825;
+    bc.save(); bc.translate(cx+Math.cos(a)*mr,cy+Math.sin(a)*mr);
+    const big=i%3===0;
+    // Stone slab shadow
+    bc.beginPath(); bc.ellipse(1,1,big?9:6,big?11:7.5,a+Math.PI/2,0,Math.PI*2);
+    bc.fillStyle='rgba(0,0,0,.18)'; bc.fill();
+    // Stone slab
+    bc.beginPath(); bc.ellipse(0,0,big?8.5:5.5,big?10.5:7,a+Math.PI/2,0,Math.PI*2);
+    const sg2=bc.createLinearGradient(-6,-6,6,6);
+    sg2.addColorStop(0,big?'#706050':'#9a8870');
+    sg2.addColorStop(1,big?'#504030':'#786858');
+    bc.fillStyle=sg2; bc.fill();
+    bc.strokeStyle='rgba(0,0,0,.18)'; bc.lineWidth=1; bc.stroke();
+    bc.fillStyle='rgba(255,255,255,.16)';
+    bc.beginPath(); bc.ellipse(-1.5,-1.5,big?3.5:2,big?4.5:2.8,a+Math.PI/2,0,Math.PI*2); bc.fill();
+    // Number carved into stone
+    bc.fillStyle=big?'#f4ead8':'#e8dcc8';
+    bc.font=`bold ${big?12.5:9.5}px Georgia,serif`;
+    bc.textAlign='center'; bc.textBaseline='middle'; bc.fillText(i,0,0);
+    bc.restore();
+  }
+}
+
+// ── Leaves ────────────────────────────────────────────────────────────────────
+function drawLeaves(leaves){
+  for(let i=0;i<leaves.length;i++){
+    const lf=leaves[i],img=ATLAS[lf.ti];
+    const sc=lf.sc,c=Math.cos(lf.ang)*sc,s=Math.sin(lf.ang)*sc;
+    ctx.setTransform(c,s,-s,c,cx+lf.x,cy+lf.y); ctx.drawImage(img,-img.width/2,-img.height/2);
+  }
+  ctx.setTransform(1,0,0,1,0,0);
+}
+
+// ── Man ───────────────────────────────────────────────────────────────────────
+function drawMan(man){
+  const pal=man.pal; const s=pal===PAL.h?1.65:1.38;
+  const sp=man.sweepPhase;
+  const raw=Math.sin(sp),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
+  ctx.save();
+  ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
+  ctx.translate(0,Math.sin(sp*2)*s*.25);
+  ctx.save(); ctx.translate(s*.8,s*.9);
+  ctx.beginPath(); ctx.ellipse(0,0,s*8.5,s*6.5,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fill(); ctx.restore();
+  const bFwd=BF_FRAC*man.rPos, bhX=bFwd, bhY=sweepT*man.sweepRange;
+  const hAng=Math.atan2(bhY,bhX-s*4.5), hPerp=hAng+Math.PI/2, hw=s*8;
+  ctx.strokeStyle=pal.broom; ctx.lineWidth=s*1.8; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(s*4.5,0); ctx.lineTo(bhX,bhY); ctx.stroke();
+  ctx.strokeStyle='#5a3408'; ctx.lineWidth=s*3.5; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(bhX+Math.cos(hPerp)*hw,bhY+Math.sin(hPerp)*hw);
+  ctx.lineTo(bhX-Math.cos(hPerp)*hw,bhY-Math.sin(hPerp)*hw); ctx.stroke();
+  for(let k=-6;k<=6;k++){
+    const bpx=bhX+Math.cos(hPerp)*hw*(k/6),bpy=bhY+Math.sin(hPerp)*hw*(k/6);
+    ctx.beginPath(); ctx.arc(bpx+Math.cos(hAng)*s*1.5,bpy+Math.sin(hAng)*s*1.5,s*.8,0,Math.PI*2);
+    ctx.fillStyle=k%2===0?pal.broom:'#c09838'; ctx.fill();
+  }
+  ctx.fillStyle=pal.shirt;
+  ctx.beginPath(); ctx.ellipse(-s*.8,0,s*4.8,s*5.9,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,.22)'; ctx.lineWidth=s*.9; ctx.stroke();
+  const g1x=s*4.5+(bhX-s*4.5)*.44,g1y=bhY*.44;
+  const g2x=s*4.5+(bhX-s*4.5)*.72,g2y=bhY*.72;
+  const sh1={x:-s*1.2,y:-s*5.1},sh2={x:-s*1.2,y:s*5.1};
+  const uL=s*6.8,fL=s*5.6;
+  function ik(sh,hx,hy,sign){
+    const dx=hx-sh.x,dy=hy-sh.y,d=Math.min(Math.hypot(dx,dy),uL+fL-.2);
+    const ca=Math.max(-1,Math.min(1,(uL*uL+d*d-fL*fL)/(2*uL*d)));
+    const a=Math.acos(ca),base=Math.atan2(dy,dx);
+    return{x:sh.x+Math.cos(base+sign*a)*uL,y:sh.y+Math.sin(base+sign*a)*uL};
+  }
+  const el1=ik(sh1,g2x,g2y,+1),el2=ik(sh2,g1x,g1y,-1);
+  function arm(sh,el,hand){
+    ctx.lineCap='round'; ctx.strokeStyle=pal.skin; ctx.lineWidth=s*3.9;
+    ctx.beginPath(); ctx.moveTo(sh.x,sh.y); ctx.lineTo(el.x,el.y); ctx.stroke();
+    ctx.beginPath(); ctx.arc(el.x,el.y,s*2.2,0,Math.PI*2);
+    ctx.fillStyle=shadeCol(pal.skin,-20); ctx.fill();
+    ctx.strokeStyle=pal.skin; ctx.lineWidth=s*3.3;
+    ctx.beginPath(); ctx.moveTo(el.x,el.y); ctx.lineTo(hand.x,hand.y); ctx.stroke();
+    ctx.beginPath(); ctx.arc(hand.x,hand.y,s*2.3,0,Math.PI*2); ctx.fillStyle=pal.skin; ctx.fill();
+  }
+  arm(sh1,el1,{x:g2x,y:g2y}); arm(sh2,el2,{x:g1x,y:g1y});
+  ctx.fillStyle=pal.hair;
+  ctx.beginPath(); ctx.arc(s*3,0,s*4.6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.14)';
+  ctx.beginPath(); ctx.arc(s*1.9,-s*1.4,s*1.6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=pal.skin;
+  ctx.beginPath(); ctx.arc(s*3,0,s*4.6,-Math.PI*.40,Math.PI*.40); ctx.fill();
+  ctx.fillStyle='#1a0c06';
+  ctx.beginPath(); ctx.arc(s*4.3,-s*.9,s*.9,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(s*4.3,s*.9,s*.9,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#1e0e08';
+  for(const sd of[-1,1]){
+    const ff=Math.sin(sp+sd*Math.PI)*s*2.9;
+    ctx.beginPath(); ctx.ellipse(-s*4.2,sd*s*2.4+ff,s*2.8,s*2.0,.5,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawHub(){
+  const g=ctx.createRadialGradient(cx-3,cy-3,0,cx,cy,15);
+  g.addColorStop(0,'#e0c870'); g.addColorStop(.6,'#9a7038'); g.addColorStop(1,'#421e10');
+  ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx,cy,6.5,0,Math.PI*2); ctx.fillStyle='#f2d880'; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx,cy,2.8,0,Math.PI*2); ctx.fillStyle='#7a5020'; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx-2,cy-2,1.5,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,.4)'; ctx.fill();
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+buildBg(); // pre-render static scene once
+init();
+
+function tick(ts){
+  const dt=Math.min((ts-prevTs)/1000,.05); prevTs=ts;
+  const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
+  stepLeaves(hL,hA,hR,dt); stepLeaves(mL,mA,mR,dt);
+  fillGrid(hGrid,hL); fillGrid(mGrid,mL);
+  hMen.forEach(m=>stepMan(m,hGrid,hL,hA,hR,dt));
+  mMen.forEach(m=>stepMan(m,mGrid,mL,mA,mR,dt));
+
+  ctx.clearRect(0,0,SZ,SZ);
+  ctx.drawImage(bgCanvas,0,0); // garden + stones + clock face (one blit)
+
+  // Men under leaves
+  hMen.forEach(drawMan); mMen.forEach(drawMan);
+  // Leaves on top
+  drawLeaves(hL); drawLeaves(mL);
+  // Hats above leaves
+  [...hMen,...mMen].forEach(man=>{
+    const s=man.pal===PAL.h?1.65:1.38, sp=man.sweepPhase;
+    ctx.save(); ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
+    ctx.translate(0,Math.sin(sp*2)*s*.25);
+    ctx.fillStyle=man.pal.hair; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.14)'; ctx.beginPath(); ctx.arc(s*1.9,-s*1.4,s*1.6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=man.pal.skin; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,-Math.PI*.40,Math.PI*.40); ctx.fill();
+    ctx.fillStyle='#1a0c06';
+    ctx.beginPath(); ctx.arc(s*4.3,-s*.9,s*.9,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(s*4.3,s*.9,s*.9,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  });
+
+  drawHub();
+  requestAnimationFrame(tick);
+}
+
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

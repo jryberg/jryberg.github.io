@@ -22,6 +22,14 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 .dir-name { color: #5f87d7; font-weight: bold; }
 #cursor { display: inline-block; width: 8px; height: 1.2em; background: #d4d4d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; }
 @keyframes blink { 50% { opacity: 0; } }
+/* X11 Window Manager - Motif/CDE style */
+.x11-window { position: fixed; background: #b4b4b4; border: 2px outset #d8d8d8; box-shadow: 2px 2px 8px rgba(0,0,0,0.5); z-index: 1000; min-width: 320px; min-height: 240px; display: flex; flex-direction: column; }
+.x11-titlebar { display: flex; align-items: center; height: 24px; background: linear-gradient(to bottom, #c8c8c8, #a0a0a0); border-bottom: 2px groove #888; padding: 0 3px; cursor: default; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
+.x11-title { flex: 1; text-align: center; font-family: 'Helvetica', 'Arial', sans-serif; font-size: 12px; font-weight: bold; color: #000; padding: 0 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 1px inset #999; background: #b0b0b0; margin: 2px 4px; line-height: 18px; }
+.x11-btn { width: 18px; height: 18px; background: #b4b4b4; border: 2px outset #d8d8d8; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; font-weight: bold; color: #000; padding: 0; line-height: 1; }
+.x11-btn:active { border-style: inset; }
+.x11-body { flex: 1; border: 2px inset #999; margin: 3px; overflow: hidden; background: #000; }
+.x11-body iframe { width: 100%; height: 100%; border: none; }
 </style>
 </head>
 <body>
@@ -39,7 +47,9 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n' },
     '/home/guest/Documents': { type: 'dir', children: [] },
     '/etc': { type: 'dir', restricted: true },
-    '/usr': { type: 'dir', restricted: true },
+    '/usr': { type: 'dir', children: ['bin'] },
+    '/usr/bin': { type: 'dir', children: ['clock'] },
+    '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock' },
     '/var': { type: 'dir', restricted: true },
     '/tmp': { type: 'dir', restricted: true }
   };
@@ -49,6 +59,26 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   var history = [];
   var historyIndex = -1;
   var terminal = document.getElementById('terminal');
+
+  // Process management (Linux-realistic PIDs)
+  var bootProcs = [
+    { pid: 1, user: 'root', cpu: '0.0', mem: '0.2', vsz: 169936, rss: 13284, tty: '?', stat: 'Ss', command: '/sbin/init' },
+    { pid: 2, user: 'root', cpu: '0.0', mem: '0.0', vsz: 0, rss: 0, tty: '?', stat: 'S', command: '[kthreadd]' },
+    { pid: 87, user: 'root', cpu: '0.0', mem: '0.1', vsz: 31608, rss: 5764, tty: '?', stat: 'Ss', command: '/lib/systemd/systemd-journald' },
+    { pid: 112, user: 'root', cpu: '0.0', mem: '0.1', vsz: 22060, rss: 3428, tty: '?', stat: 'Ss', command: '/lib/systemd/systemd-udevd' },
+    { pid: 198, user: 'root', cpu: '0.0', mem: '0.0', vsz: 6816, rss: 2964, tty: '?', stat: 'Ss', command: 'cron -f' },
+    { pid: 204, user: 'root', cpu: '0.0', mem: '0.1', vsz: 15420, rss: 7060, tty: '?', stat: 'Ss', command: '/usr/sbin/sshd -D' },
+    { pid: 312, user: 'root', cpu: '0.0', mem: '0.1', vsz: 17180, rss: 7416, tty: '?', stat: 'Ss', command: 'sshd: guest [priv]' },
+    { pid: 354, user: 'guest', cpu: '0.0', mem: '0.1', vsz: 17180, rss: 4520, tty: '?', stat: 'S', command: 'sshd: guest@pts/0' }
+  ];
+  var bashPid = 355;
+  var nextPid = 356;
+  var processes = {};
+  var jobs = {};
+  var nextJobId = 1;
+  var foregroundPid = null;
+  var completedJobs = [];
+  var PATH = ['/usr/bin'];
 
   function escapeHTML(str) {
     var div = document.createElement('div');
@@ -127,6 +157,176 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 
   function scrollToBottom() {
     terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  // X11 window management
+  var topZIndex = 1000;
+
+  function bringToFront(win) {
+    topZIndex++;
+    win.style.zIndex = topZIndex;
+  }
+
+  function makeWindowDraggable(win, handle) {
+    var dragging = false, startX, startY, origLeft, origTop;
+    handle.addEventListener('mousedown', function(e) {
+      if (e.target.tagName === 'BUTTON') return;
+      dragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      origLeft = parseInt(win.style.left) || 0;
+      origTop = parseInt(win.style.top) || 0;
+      var iframe = win.querySelector('iframe');
+      if (iframe) iframe.style.pointerEvents = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      win.style.left = (origLeft + e.clientX - startX) + 'px';
+      win.style.top = (origTop + e.clientY - startY) + 'px';
+    });
+    document.addEventListener('mouseup', function() {
+      if (dragging) {
+        dragging = false;
+        var iframe = win.querySelector('iframe');
+        if (iframe) iframe.style.pointerEvents = '';
+      }
+    });
+  }
+
+  function createX11Window(fileMeta, pid) {
+    var win = document.createElement('div');
+    win.className = 'x11-window';
+    win.dataset.pid = pid;
+    var w = Math.min(640, window.innerWidth - 40);
+    var h = Math.min(520, window.innerHeight - 40);
+    var offsetX = (Math.random() - 0.5) * 60;
+    var offsetY = (Math.random() - 0.5) * 60;
+    win.style.width = w + 'px';
+    win.style.height = h + 'px';
+    win.style.left = Math.max(10, (window.innerWidth - w) / 2 + offsetX) + 'px';
+    win.style.top = Math.max(10, (window.innerHeight - h) / 2 + offsetY) + 'px';
+
+    var titlebar = document.createElement('div');
+    titlebar.className = 'x11-titlebar';
+    var btnMin = document.createElement('button');
+    btnMin.className = 'x11-btn';
+    btnMin.textContent = '_';
+    btnMin.title = 'Minimize';
+    var title = document.createElement('div');
+    title.className = 'x11-title';
+    title.textContent = fileMeta.windowTitle || 'X11 Application';
+    var btnMax = document.createElement('button');
+    btnMax.className = 'x11-btn';
+    btnMax.textContent = '\u25a1';
+    btnMax.title = 'Maximize';
+    var btnClose = document.createElement('button');
+    btnClose.className = 'x11-btn';
+    btnClose.textContent = 'X';
+    btnClose.title = 'Close';
+    titlebar.appendChild(btnMin);
+    titlebar.appendChild(title);
+    titlebar.appendChild(btnMax);
+    titlebar.appendChild(btnClose);
+
+    var body = document.createElement('div');
+    body.className = 'x11-body';
+    var iframe = document.createElement('iframe');
+    iframe.src = fileMeta.src;
+    body.appendChild(iframe);
+
+    win.appendChild(titlebar);
+    win.appendChild(body);
+    document.body.appendChild(win);
+
+    btnClose.addEventListener('click', function() { killProcess(pid); });
+    btnMin.addEventListener('click', function() { win.style.display = 'none'; });
+    var maximized = false;
+    var origStyle = { width: win.style.width, height: win.style.height, left: win.style.left, top: win.style.top };
+    btnMax.addEventListener('click', function() {
+      if (!maximized) {
+        origStyle = { width: win.style.width, height: win.style.height, left: win.style.left, top: win.style.top };
+        win.style.left = '0'; win.style.top = '0'; win.style.width = '100vw'; win.style.height = '100vh';
+      } else {
+        win.style.width = origStyle.width; win.style.height = origStyle.height;
+        win.style.left = origStyle.left; win.style.top = origStyle.top;
+      }
+      maximized = !maximized;
+    });
+    makeWindowDraggable(win, titlebar);
+    win.addEventListener('mousedown', function() { bringToFront(win); });
+    return win;
+  }
+
+  // Process lifecycle
+  function disableTerminalInput() {
+    input.disabled = true;
+    cursor.style.display = 'none';
+    inputLine.style.display = 'none';
+  }
+
+  function enableTerminalInput() {
+    input.disabled = false;
+    cursor.style.display = '';
+    inputLine.style.display = '';
+    input.focus();
+  }
+
+  function spawnXApp(command, fileMeta, background) {
+    var pid = nextPid++;
+    var proc = { pid: pid, command: command, jobId: null, windowEl: null, startTime: new Date(), status: 'running' };
+    proc.windowEl = createX11Window(fileMeta, pid);
+    processes[pid] = proc;
+    if (background) {
+      var jobId = nextJobId++;
+      proc.jobId = jobId;
+      jobs[jobId] = { jobId: jobId, pid: pid, command: command, status: 'running' };
+      addLine('[' + jobId + '] ' + pid);
+    } else {
+      foregroundPid = pid;
+      disableTerminalInput();
+    }
+  }
+
+  function killProcess(pid) {
+    var proc = processes[pid];
+    if (!proc) return false;
+    if (proc.windowEl && proc.windowEl.parentNode) proc.windowEl.parentNode.removeChild(proc.windowEl);
+    if (foregroundPid === pid) {
+      foregroundPid = null;
+      enableTerminalInput();
+      updatePrompt();
+      scrollToBottom();
+    }
+    if (proc.jobId && jobs[proc.jobId]) {
+      jobs[proc.jobId].status = 'done';
+      completedJobs.push(jobs[proc.jobId]);
+    }
+    proc.status = 'done';
+    delete processes[pid];
+    return true;
+  }
+
+  function reportCompletedJobs() {
+    while (completedJobs.length > 0) {
+      var job = completedJobs.shift();
+      addLine('[' + job.jobId + ']+  Done                    ' + job.command);
+      delete jobs[job.jobId];
+    }
+  }
+
+  // PATH resolution
+  function resolveFromPath(cmdName) {
+    for (var i = 0; i < PATH.length; i++) {
+      var binPath = PATH[i] + '/' + cmdName;
+      var entry = fs[binPath];
+      if (entry && entry.type === 'file' && entry.executable) return { path: binPath, entry: entry };
+    }
+    return null;
+  }
+
+  function formatPsTime(d) {
+    return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
   }
 
   function isRestricted(path) {
@@ -247,7 +447,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       for (var i = 0; i < lines.length; i++) lines[i].remove();
     },
     help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, help, exit');
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, clock, help, exit');
     },
     echo: function(args) { addLine(args.join(' ')); },
     date: function() { addLine(formatDate(new Date())); },
@@ -257,6 +457,43 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       });
     },
     exit: function() { addLine('logout'); addLine('Connection to securit.se closed.'); input.disabled = true; cursor.style.display = 'none'; },
+    ps: function(args) {
+      var now = new Date();
+      addLine('USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND');
+      for (var i = 0; i < bootProcs.length; i++) {
+        var bp = bootProcs[i];
+        addLine(bp.user.padEnd(8) + ' ' + bp.pid.toString().padStart(4) + '  ' + bp.cpu + '  ' + bp.mem + ' ' + bp.vsz.toString().padStart(6) + ' ' + bp.rss.toString().padStart(5) + ' ' + bp.tty.padEnd(8) + ' ' + bp.stat.padEnd(4) + ' ' + formatPsTime(now) + '   0:00 ' + bp.command);
+      }
+      addLine('guest    ' + bashPid.toString().padStart(4) + '  0.0  0.1  22456  5432 pts/0    Ss   ' + formatPsTime(now) + '   0:00 -bash');
+      var pids = Object.keys(processes);
+      for (var j = 0; j < pids.length; j++) {
+        var proc = processes[pids[j]];
+        var stat = (foregroundPid === proc.pid) ? 'S+  ' : 'S   ';
+        addLine('guest   ' + proc.pid.toString().padStart(5) + '  0.2  0.3  45200  8192 pts/0    ' + stat + formatPsTime(proc.startTime) + '   0:00 ' + proc.command);
+      }
+      addLine('guest   ' + nextPid.toString().padStart(5) + '  0.0  0.0  15320  2048 pts/0    R+   ' + formatPsTime(now) + '   0:00 ps ' + (args.join(' ') || 'aux'));
+    },
+    kill: function(args) {
+      if (!args.length) { addLine('kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]'); return; }
+      for (var i = 0; i < args.length; i++) {
+        if (args[i].startsWith('-')) continue;
+        var pid = parseInt(args[i]);
+        if (isNaN(pid)) { addLine('-bash: kill: ' + args[i] + ': arguments must be process or job IDs'); continue; }
+        if (pid === bashPid || bootProcs.some(function(bp) { return bp.pid === pid; })) {
+          addLine('-bash: kill: (' + pid + ') - Operation not permitted');
+          continue;
+        }
+        if (!killProcess(pid)) addLine('-bash: kill: (' + pid + ') - No such process');
+      }
+    },
+    jobs: function() {
+      var jobIds = Object.keys(jobs);
+      for (var i = 0; i < jobIds.length; i++) {
+        var job = jobs[jobIds[i]];
+        var status = job.status === 'running' ? 'Running' : 'Done';
+        addLine('[' + job.jobId + ']+  ' + status + '                 ' + job.command + (job.status === 'running' ? ' &' : ''));
+      }
+    },
     sudo: function() { addLine('[sudo] password for guest: '); addLine('guest is not in the sudoers file. This incident will be reported.'); },
     su: function() { addLine('Password: '); addLine('su: Authentication failure'); }
   };
@@ -268,6 +505,15 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     if (!trimmed) return;
     history.push(trimmed);
     historyIndex = history.length;
+
+    // Check for & (background execution)
+    var background = false;
+    if (trimmed.endsWith('&')) {
+      background = true;
+      trimmed = trimmed.slice(0, -1).trim();
+      if (!trimmed) return;
+    }
+
     var parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
     var cmd = parts[0];
     var args = parts.slice(1).map(function(a) {
@@ -279,7 +525,12 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     } else if (denied.indexOf(cmd) !== -1) {
       addLine('-bash: ' + cmd + ': Permission denied');
     } else {
-      addLine('-bash: ' + cmd + ': command not found');
+      var resolved = resolveFromPath(cmd);
+      if (resolved && resolved.entry.xapp) {
+        spawnXApp(cmd, resolved.entry, background);
+      } else {
+        addLine('-bash: ' + cmd + ': command not found');
+      }
     }
   }
 
@@ -320,7 +571,20 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     typed.textContent = input.value;
   }
 
-  var cmdNames = Object.keys(commands).concat(denied);
+  function getCompletableCommands() {
+    var names = Object.keys(commands).concat(denied);
+    for (var i = 0; i < PATH.length; i++) {
+      var dir = fs[PATH[i]];
+      if (dir && dir.type === 'dir' && dir.children) {
+        for (var j = 0; j < dir.children.length; j++) {
+          var childPath = PATH[i] + '/' + dir.children[j];
+          var child = fs[childPath];
+          if (child && child.executable && names.indexOf(dir.children[j]) === -1) names.push(dir.children[j]);
+        }
+      }
+    }
+    return names;
+  }
 
   function tabComplete(value) {
     var parts = value.split(/\s+/);
@@ -328,7 +592,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     var partial = parts[parts.length - 1] || '';
 
     if (isFirst) {
-      // Complete command names
+      var cmdNames = getCompletableCommands();
       var matches = cmdNames.filter(function(c) { return c.startsWith(partial); });
       return { matches: matches, prefix: partial, isPath: false };
     }
@@ -392,12 +656,31 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   input.addEventListener('input', syncTyped);
 
   input.addEventListener('keydown', function(e) {
+    // Ctrl+C: kill foreground process or cancel input
+    if (e.key === 'c' && e.ctrlKey) {
+      e.preventDefault();
+      if (foregroundPid !== null) {
+        killProcess(foregroundPid);
+        addLine('^C');
+        scrollToBottom();
+      } else {
+        addCommandLine(input.value + '^C');
+        input.value = '';
+        syncTyped();
+        historyIndex = history.length;
+        scrollToBottom();
+      }
+      return;
+    }
+    // Block all other input while foreground process is running
+    if (foregroundPid !== null) { e.preventDefault(); return; }
     if (e.key === 'Enter') {
       e.preventDefault();
       var val = input.value;
       addCommandLine(val);
       input.value = '';
       syncTyped();
+      reportCompletedJobs();
       execute(val);
       updatePrompt();
       scrollToBottom();
@@ -408,13 +691,6 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       e.preventDefault();
       if (historyIndex < history.length - 1) { historyIndex++; input.value = history[historyIndex]; syncTyped(); }
       else { historyIndex = history.length; input.value = ''; syncTyped(); }
-    } else if (e.key === 'c' && e.ctrlKey) {
-      e.preventDefault();
-      addCommandLine(input.value + '^C');
-      input.value = '';
-      syncTyped();
-      historyIndex = history.length;
-      scrollToBottom();
     } else if (e.key === 'l' && e.ctrlKey) {
       e.preventDefault();
       commands.clear();
