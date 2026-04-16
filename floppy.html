@@ -12,25 +12,16 @@ html, body {
   overflow: hidden;
   font-family: 'Courier New', Courier, monospace;
 }
-#wrap {
-  position: relative;
-  display: inline-block;
-}
-canvas {
-  display: block;
-  image-rendering: pixelated;
-}
-/* CRT scanline overlay */
+#wrap { position: relative; display: inline-block; }
+canvas { display: block; image-rendering: pixelated; outline: none; }
 #wrap::after {
   content: '';
   position: absolute;
   inset: 0;
   background: repeating-linear-gradient(
     to bottom,
-    rgba(0,0,0,0.08) 0px,
-    rgba(0,0,0,0.08) 1px,
-    transparent 1px,
-    transparent 3px
+    rgba(0,0,0,0.07) 0px, rgba(0,0,0,0.07) 1px,
+    transparent 1px, transparent 3px
   );
   pointer-events: none;
   z-index: 10;
@@ -38,16 +29,13 @@ canvas {
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="c"></canvas>
-</div>
+<div id="wrap"><canvas id="c" tabindex="0"></canvas></div>
 <script>
 (function() {
 'use strict';
 
 var canvas = document.getElementById('c');
 var ctx = canvas.getContext('2d');
-
 var W, H;
 
 function resize() {
@@ -59,112 +47,383 @@ function resize() {
 resize();
 window.addEventListener('resize', function() {
   resize();
+  buildBackground();
   if (state === 'start') drawStart();
 });
 
 // ── Level definitions ─────────────────────────────────────────────────────────
 var LEVELS = [
-  { gap: 165, speed: 2.0, interval: 125 },  // 1
-  { gap: 155, speed: 2.5, interval: 115 },  // 2
-  { gap: 145, speed: 3.0, interval: 105 },  // 3
-  { gap: 135, speed: 3.5, interval: 97  },  // 4
-  { gap: 125, speed: 4.0, interval: 90  },  // 5
-  { gap: 115, speed: 4.5, interval: 84  },  // 6+
+  { gap: 165, speed: 2.0, interval: 125 },
+  { gap: 155, speed: 2.5, interval: 115 },
+  { gap: 145, speed: 3.0, interval: 105 },
+  { gap: 135, speed: 3.5, interval: 97  },
+  { gap: 125, speed: 4.0, interval: 90  },
+  { gap: 115, speed: 4.5, interval: 84  },
 ];
 function getLevelDef(lv) { return LEVELS[Math.min(lv - 1, LEVELS.length - 1)]; }
 
 // ── Game state ────────────────────────────────────────────────────────────────
-var state; // 'start' | 'playing' | 'dead' | 'levelup'
-var score, level, levelupTimer;
-var fy, fvy; // floppy y, vertical velocity
-var pipes;   // [{x, topH, scored}]
+var state;
+var score, level, levelupTimer, levelFlash;
+var fy, fvy;
+var pipes;
 var frameCount, sinceLastPipe;
-var levelFlash; // levelup message opacity
 
-var FX = 120;         // floppy fixed x
-var FW = 44, FH = 44; // floppy width/height
+var FX = 120;
+var FW = 44, FH = 44;
 var GRAVITY = 0.35;
 var FLAP = -7;
-var HIT_INSET = 7;    // shrink hitbox
+var HIT_INSET = 7;
 
-// ── Deterministic pseudo-random for background ────────────────────────────────
+// ── Deterministic pseudo-random ───────────────────────────────────────────────
 function dr(s) { var x = Math.sin(s * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
-// ── Pre-compute background (circuit board) ────────────────────────────────────
+// ── Background canvas ─────────────────────────────────────────────────────────
 var bgCanvas = document.createElement('canvas');
 var bgCtx = bgCanvas.getContext('2d');
+
+// Component drawing helpers (draw onto context b)
+function dipChip(b, x, y, pins, label) {
+  var half = pins / 2;
+  var pitch = 6;
+  var bw = half * pitch + 4;
+  var bh = pins <= 16 ? 14 : pins <= 28 ? 18 : 22;
+  var pl = 4;
+  b.fillStyle = '#111110';
+  b.fillRect(x, y, bw, bh);
+  b.strokeStyle = '#252520';
+  b.lineWidth = 0.5;
+  b.strokeRect(x, y, bw, bh);
+  // notch
+  b.fillStyle = '#1e1e1c';
+  b.beginPath(); b.arc(x + bw / 2, y, 3, 0, Math.PI); b.fill();
+  // index dot
+  b.fillStyle = '#3a3a28';
+  b.beginPath(); b.arc(x + 5, y + 4, 1.5, 0, Math.PI * 2); b.fill();
+  // label
+  b.fillStyle = '#7a7a60';
+  b.font = 'bold ' + (pins <= 8 ? 5 : 4) + 'px "Courier New", monospace';
+  b.textAlign = 'center';
+  b.fillText(label, x + bw / 2, y + bh / 2 + 2);
+  b.textAlign = 'left';
+  // pins
+  b.fillStyle = '#8a9a50';
+  for (var p = 0; p < half; p++) {
+    var px = x + 4 + p * pitch;
+    b.fillRect(px, y - pl, 2, pl);
+    b.fillRect(px, y + bh, 2, pl);
+  }
+}
+
+function smdResistor(b, x, y, seed) {
+  var bw = 9, bh = 4;
+  b.fillStyle = '#c0980c';
+  b.fillRect(x - 2, y - 1, 3, bh + 2);
+  b.fillRect(x + bw - 1, y - 1, 3, bh + 2);
+  b.fillStyle = '#1a1a14';
+  b.fillRect(x, y, bw, bh);
+  var bc = ['#cc2222','#2244cc','#228822','#cccc00','#cc5500','#999999','#cc4488'];
+  b.fillStyle = bc[seed % bc.length];
+  b.fillRect(x + 3, y + 1, 2, bh - 2);
+}
+
+function electroCap(b, cx, cy, r) {
+  b.beginPath(); b.arc(cx + 1, cy + 1, r, 0, Math.PI * 2);
+  b.fillStyle = 'rgba(0,0,0,0.4)'; b.fill();
+  b.beginPath(); b.arc(cx, cy, r, 0, Math.PI * 2);
+  b.fillStyle = '#1e4a7a'; b.fill();
+  b.strokeStyle = '#0e2a4a'; b.lineWidth = 0.7; b.stroke();
+  // vent lines
+  b.strokeStyle = '#3a7ab8'; b.lineWidth = 0.8;
+  b.beginPath(); b.moveTo(cx - r * 0.6, cy); b.lineTo(cx + r * 0.6, cy); b.stroke();
+  b.beginPath(); b.moveTo(cx, cy - r * 0.6); b.lineTo(cx, cy + r * 0.6); b.stroke();
+  // + symbol
+  b.fillStyle = '#5a9acc'; b.font = '6px sans-serif'; b.textAlign = 'center';
+  b.fillText('+', cx - r * 0.45, cy - r * 0.25);
+  b.textAlign = 'left';
+  // shine
+  b.beginPath(); b.arc(cx - r * 0.3, cy - r * 0.3, r * 0.22, 0, Math.PI * 2);
+  b.fillStyle = 'rgba(140,200,255,0.15)'; b.fill();
+}
+
+function filmCap(b, x, y, seed) {
+  var bw = 7, bh = 10;
+  var cols = ['#aa8830','#cc6410','#cc9920','#a06820'];
+  b.fillStyle = cols[seed % cols.length];
+  b.fillRect(x, y, bw, bh);
+  b.strokeStyle = 'rgba(0,0,0,0.3)'; b.lineWidth = 0.5;
+  b.strokeRect(x, y, bw, bh);
+  b.fillStyle = '#8a9a50';
+  b.fillRect(x + 1, y + bh, 2, 4);
+  b.fillRect(x + bw - 3, y + bh, 2, 4);
+}
+
+function crystalOsc(b, x, y) {
+  var bw = 9, bh = 22;
+  b.fillStyle = '#aaaaaa'; b.fillRect(x, y, bw, bh);
+  b.fillStyle = '#cccccc'; b.fillRect(x, y, bw, 3);
+  b.fillStyle = '#888'; b.fillRect(x, y + bh - 3, bw, 3);
+  b.strokeStyle = '#666'; b.lineWidth = 0.5; b.strokeRect(x, y, bw, bh);
+  b.strokeStyle = '#999'; b.lineWidth = 0.5;
+  b.beginPath(); b.moveTo(x + bw / 2, y); b.lineTo(x + bw / 2, y + bh); b.stroke();
+  b.fillStyle = '#8a9a50';
+  b.fillRect(x + 1, y + bh, 2, 5); b.fillRect(x + bw - 3, y + bh, 2, 5);
+  b.fillStyle = '#444'; b.font = '4px "Courier New", monospace'; b.textAlign = 'center';
+  b.fillText('MHz', x + bw / 2, y + bh / 2 + 2); b.textAlign = 'left';
+}
+
+function pinHeader(b, x, y, rows, cols) {
+  var pitch = 8;
+  b.fillStyle = '#1a1a14';
+  b.fillRect(x - 2, y - 2, cols * pitch + 4, rows * pitch + 4);
+  b.strokeStyle = '#333328'; b.lineWidth = 0.5;
+  b.strokeRect(x - 2, y - 2, cols * pitch + 4, rows * pitch + 4);
+  for (var row = 0; row < rows; row++) {
+    for (var col = 0; col < cols; col++) {
+      var px = x + col * pitch + pitch / 2;
+      var py = y + row * pitch + pitch / 2;
+      b.beginPath(); b.arc(px, py, 2, 0, Math.PI * 2);
+      b.fillStyle = '#c0aa00'; b.fill();
+      b.beginPath(); b.arc(px, py, 0.9, 0, Math.PI * 2);
+      b.fillStyle = '#050e05'; b.fill();
+    }
+  }
+}
+
+function heatSink(b, x, y, bw, bh) {
+  b.fillStyle = '#4a4a4a'; b.fillRect(x, y, bw, bh);
+  var fins = Math.floor(bw / 6);
+  for (var f = 0; f < fins; f++) {
+    var fx = x + f * 6;
+    b.fillStyle = f % 2 === 0 ? '#626262' : '#3a3a3a';
+    b.fillRect(fx, y, 4, bh);
+    b.fillStyle = '#787878'; b.fillRect(fx, y, 4, 2);
+  }
+  b.strokeStyle = '#222'; b.lineWidth = 0.5; b.strokeRect(x, y, bw, bh);
+}
+
+function diode(b, x, y) {
+  b.fillStyle = '#8a9a50';
+  b.fillRect(x - 4, y + 1, 4, 2);
+  b.fillRect(x + 8, y + 1, 4, 2);
+  b.fillStyle = '#282818'; b.fillRect(x, y, 8, 4);
+  b.fillStyle = '#cccccc'; b.fillRect(x + 6, y, 2, 4);
+}
+
+function transistorTO92(b, x, y) {
+  b.fillStyle = '#181818';
+  b.beginPath(); b.arc(x, y, 7, Math.PI, 0); b.fill();
+  b.fillRect(x - 7, y, 14, 5); b.fill();
+  b.strokeStyle = '#2a2a2a'; b.lineWidth = 0.5;
+  b.beginPath(); b.arc(x, y, 7, Math.PI, 0); b.stroke();
+  b.strokeRect(x - 7, y, 14, 5);
+  b.fillStyle = '#8a9a50';
+  for (var l = -1; l <= 1; l++) b.fillRect(x + l * 4 - 1, y + 5, 2, 6);
+}
+
+function via(b, vx, vy) {
+  b.beginPath(); b.arc(vx, vy, 3.5, 0, Math.PI * 2);
+  b.fillStyle = '#b8920a'; b.fill();
+  b.beginPath(); b.arc(vx, vy, 1.8, 0, Math.PI * 2);
+  b.fillStyle = '#060f06'; b.fill();
+}
+
+function lTrace(b, x1, y1, x2, y2, lw) {
+  // L-shaped trace: horizontal then vertical
+  b.lineWidth = lw || 1.5;
+  b.beginPath(); b.moveTo(x1, y1); b.lineTo(x2, y1); b.lineTo(x2, y2); b.stroke();
+}
 
 function buildBackground() {
   bgCanvas.width = W;
   bgCanvas.height = H;
-  var bx = bgCtx;
+  var b = bgCtx;
 
   // PCB base
-  bx.fillStyle = '#0a1a0a';
-  bx.fillRect(0, 0, W, H);
+  b.fillStyle = '#0c1c0c';
+  b.fillRect(0, 0, W, H);
 
-  // Horizontal traces
-  var numH = 18;
-  for (var i = 0; i < numH; i++) {
-    var y = dr(i * 3 + 1) * H;
-    var len = (0.3 + dr(i * 3 + 2) * 0.5) * W;
-    var sx = dr(i * 3 + 3) * (W - len);
-    bx.strokeStyle = 'rgba(30,80,30,0.7)';
-    bx.lineWidth = 1 + Math.floor(dr(i + 50) * 2);
-    bx.beginPath(); bx.moveTo(sx, y); bx.lineTo(sx + len, y); bx.stroke();
-  }
-  // Vertical traces
-  var numV = 12;
-  for (var j = 0; j < numV; j++) {
-    var x = dr(j * 5 + 7) * W;
-    var vlen = (0.2 + dr(j * 5 + 8) * 0.4) * H;
-    var sy = dr(j * 5 + 9) * (H - vlen);
-    bx.strokeStyle = 'rgba(30,80,30,0.6)';
-    bx.lineWidth = 1 + Math.floor(dr(j + 80) * 2);
-    bx.beginPath(); bx.moveTo(x, sy); bx.lineTo(x, sy + vlen); bx.stroke();
-  }
-  // Solder pads (gold dots at trace intersections)
-  for (var k = 0; k < 28; k++) {
-    var px = dr(k * 7 + 2) * W;
-    var py = dr(k * 7 + 3) * H;
-    bx.beginPath();
-    bx.arc(px, py, 3, 0, Math.PI * 2);
-    bx.fillStyle = '#b8920a';
-    bx.fill();
-    bx.beginPath();
-    bx.arc(px, py, 1.5, 0, Math.PI * 2);
-    bx.fillStyle = '#d4aa20';
-    bx.fill();
-  }
-  // IC chip silhouettes
-  var chips = [
-    { x: 40,  y: 60,  w: 50, h: 28 },
-    { x: W-100, y: 80,  w: 50, h: 28 },
-    { x: 30,  y: H-100, w: 60, h: 22 },
-    { x: W-90, y: H-80, w: 40, h: 20 },
+  // Ground plane patches
+  var gps = [
+    [0, 0, W * 0.28, H * 0.22],
+    [W * 0.72, 0, W * 0.28, H * 0.18],
+    [0, H * 0.78, W * 0.35, H * 0.22],
+    [W * 0.65, H * 0.82, W * 0.35, H * 0.18],
+    [W * 0.3, H * 0.4, W * 0.15, H * 0.2],
   ];
-  chips.forEach(function(c) {
-    bx.fillStyle = '#0f1a0f';
-    bx.fillRect(c.x, c.y, c.w, c.h);
-    bx.strokeStyle = '#1e3a1e';
-    bx.lineWidth = 1;
-    bx.strokeRect(c.x, c.y, c.w, c.h);
-    // pins left
-    for (var p = 0; p < 4; p++) {
-      var py2 = c.y + 4 + p * 6;
-      bx.fillStyle = '#6a7a40';
-      bx.fillRect(c.x - 5, py2, 5, 3);
+  gps.forEach(function(g) {
+    b.fillStyle = '#0a180a';
+    b.fillRect(g[0], g[1], g[2], g[3]);
+    b.strokeStyle = '#183818'; b.lineWidth = 1;
+    b.strokeRect(g[0] + 1, g[1] + 1, g[2] - 2, g[3] - 2);
+    // hatch
+    b.strokeStyle = 'rgba(20,60,20,0.4)'; b.lineWidth = 0.5;
+    for (var hx = g[0]; hx < g[0] + g[2]; hx += 8) {
+      b.beginPath(); b.moveTo(hx, g[1]); b.lineTo(hx, g[1] + g[3]); b.stroke();
     }
-    // pins right
-    for (var q = 0; q < 4; q++) {
-      var py3 = c.y + 4 + q * 6;
-      bx.fillStyle = '#6a7a40';
-      bx.fillRect(c.x + c.w, py3, 5, 3);
+    for (var hy = g[1]; hy < g[1] + g[3]; hy += 8) {
+      b.beginPath(); b.moveTo(g[0], hy); b.lineTo(g[0] + g[2], hy); b.stroke();
     }
-    // label stripe on chip
-    bx.fillStyle = '#1a2a1a';
-    bx.fillRect(c.x + 2, c.y + 2, c.w - 4, 8);
   });
+
+  // Copper traces
+  b.strokeStyle = '#2c6c2c';
+  // Horizontal traces
+  var trH = [
+    [0, 40, W * 0.55], [W * 0.4, 100, W * 0.6],
+    [0, H * 0.35, W * 0.3], [W * 0.65, H * 0.35, W * 0.35],
+    [0, H * 0.6, W * 0.45], [W * 0.5, H * 0.7, W * 0.5],
+    [0, H - 40, W * 0.6], [W * 0.35, H - 80, W * 0.65],
+    [W * 0.15, H * 0.5, W * 0.4],
+  ];
+  trH.forEach(function(t) {
+    b.lineWidth = dr(t[1]) > 0.6 ? 2 : 1;
+    b.beginPath(); b.moveTo(t[0], t[1]); b.lineTo(t[0] + t[2], t[1]); b.stroke();
+  });
+  // Vertical traces
+  var trV = [
+    [50, 0, H * 0.45], [W * 0.2, H * 0.3, H * 0.7],
+    [W - 50, 0, H * 0.5], [W * 0.8, H * 0.5, H * 0.5],
+    [W * 0.45, 0, H * 0.3], [W * 0.6, H * 0.6, H * 0.4],
+    [W * 0.35, H * 0.4, H * 0.3],
+  ];
+  trV.forEach(function(t) {
+    b.lineWidth = dr(t[0]) > 0.7 ? 2 : 1;
+    b.beginPath(); b.moveTo(t[0], t[1]); b.lineTo(t[0], t[1] + t[2]); b.stroke();
+  });
+  // L-shaped traces
+  b.strokeStyle = '#266626';
+  lTrace(b, 50, 40, W * 0.2, H * 0.35, 1);
+  lTrace(b, W - 50, 40, W * 0.8, H * 0.35, 1);
+  lTrace(b, W * 0.45, H * 0.3, W * 0.6, H * 0.6, 1);
+  lTrace(b, W * 0.2, H * 0.35, W * 0.35, H * 0.4, 1.5);
+  lTrace(b, 50, H * 0.6, W * 0.2, H * 0.78, 1);
+  lTrace(b, W * 0.65, H * 0.35, W * 0.8, H * 0.5, 1);
+  // Power rail (thick)
+  b.strokeStyle = '#1a4a1a'; b.lineWidth = 3;
+  b.beginPath(); b.moveTo(W * 0.1, 0); b.lineTo(W * 0.1, H); b.stroke();
+  b.beginPath(); b.moveTo(W * 0.9, 0); b.lineTo(W * 0.9, H); b.stroke();
+  b.beginPath(); b.moveTo(0, H * 0.15); b.lineTo(W, H * 0.15); b.stroke();
+  b.beginPath(); b.moveTo(0, H * 0.85); b.lineTo(W, H * 0.85); b.stroke();
+
+  // Via holes (many)
+  var viaPositions = [
+    [50,40],[W*0.2,40],[W*0.2,H*0.35],[W*0.35,H*0.4],[W*0.2,H*0.78],
+    [50,H*0.35],[50,H*0.6],[50,H-40],[W*0.45,H*0.3],[W*0.45,0.3*H],
+    [W*0.6,H*0.6],[W*0.6,H*0.7],[W-50,40],[W*0.8,H*0.35],[W*0.8,H*0.5],
+    [W-50,H*0.5],[W*0.65,H*0.35],[W*0.35,H-80],[W*0.4,100],[W*0.4,H*0.35],
+  ];
+  // Extra random vias
+  for (var vi = 0; vi < 30; vi++) {
+    viaPositions.push([dr(vi*11+2)*W, dr(vi*11+3)*H]);
+  }
+  viaPositions.forEach(function(vp) { via(b, vp[0], vp[1]); });
+
+  // ── DIP Chips ──
+  dipChip(b, 18,  18,  8,  'NE555');
+  dipChip(b, 115, 12,  14, '74LS00');
+  dipChip(b, W-155, 18, 16, 'LM386');
+  dipChip(b, W-82,  14, 8,  'LM741');
+  dipChip(b, 12,  H*0.42, 20, 'Z80 CPU');
+  dipChip(b, W-175, H*0.5-10, 40, 'INTEL 8088');
+  dipChip(b, 18,  H-92, 16, '27C256');
+  dipChip(b, W-148, H-85, 14, '74HC244');
+  dipChip(b, W*0.5-80, 8, 20, 'GAL16V8');
+  dipChip(b, W*0.5+10, H-80, 16, 'SN76489');
+  dipChip(b, W-155, H*0.25, 14, '74LS138');
+  dipChip(b, 18,  H*0.22, 8,  'LM358');
+
+  // ── SMD Resistors (scattered) ──
+  for (var ri = 0; ri < 35; ri++) {
+    var rx = 20 + dr(ri * 7 + 1) * (W - 40);
+    var ry = 20 + dr(ri * 7 + 2) * (H - 40);
+    smdResistor(b, rx, ry, ri);
+  }
+
+  // ── Electrolytic Capacitors ──
+  var ecaps = [
+    [80,50,9],[W-62,120,11],[52,H-65,9],[W-82,H-55,8],
+    [W*0.5+55,H-72,12],[168,H-58,7],[W-128,52,9],[W*0.5-30,H*0.5,8],
+    [W*0.75,H*0.75,10],[W*0.25,H*0.7,7],
+  ];
+  ecaps.forEach(function(c) { electroCap(b, c[0], c[1], c[2]); });
+
+  // ── Film/Ceramic Capacitors ──
+  for (var fi = 0; fi < 22; fi++) {
+    var fx2 = 25 + dr(fi * 13 + 5) * (W - 50);
+    var fy2 = 25 + dr(fi * 13 + 6) * (H - 50);
+    filmCap(b, fx2, fy2, fi);
+  }
+
+  // ── Crystal Oscillators ──
+  crystalOsc(b, W * 0.5 + 20, 12);
+  crystalOsc(b, W - 205, H - 72);
+  crystalOsc(b, W * 0.3 - 5, H * 0.6);
+
+  // ── Pin Headers / Connectors ──
+  pinHeader(b, W * 0.5 - 22, H - 48, 2, 5);
+  pinHeader(b, 18, H * 0.5 + 65, 2, 4);
+  pinHeader(b, W - 92, H * 0.5 - 30, 1, 8);
+  pinHeader(b, W * 0.4, H * 0.18, 2, 3);
+
+  // ── Heat Sink ──
+  heatSink(b, W - 58, H * 0.5 - 65, 52, 85);
+  heatSink(b, W * 0.5 - 40, H - 38, 35, 30);
+
+  // ── Diodes ──
+  for (var di = 0; di < 12; di++) {
+    var ddx = 30 + dr(di * 17 + 9)  * (W - 60);
+    var ddy = 30 + dr(di * 17 + 10) * (H - 60);
+    diode(b, ddx, ddy);
+  }
+
+  // ── Transistors ──
+  for (var ti = 0; ti < 8; ti++) {
+    var ttx = 35 + dr(ti * 19 + 15) * (W - 70);
+    var tty = 35 + dr(ti * 19 + 16) * (H - 70);
+    transistorTO92(b, ttx, tty);
+  }
+
+  // ── Silkscreen labels ──
+  b.fillStyle = 'rgba(210,225,210,0.32)';
+  b.font = '7px "Courier New", monospace';
+  b.textAlign = 'left';
+  var labels = [
+    [18,15,'U1'],[113,10,'U2'],[W-157,15,'U3'],[W-84,12,'U4'],
+    [10,H*0.39,'U5'],[W-178,H*0.47,'U6'],[16,H-95,'U7'],[W-150,H-88,'U8'],
+    [W*0.5-83,6,'U9'],[W*0.5+8,H-83,'U10'],[W-157,H*0.22,'U11'],[16,H*0.19,'U12'],
+    [78,47,'C1'],[W-65,117,'C2'],[50,H-68,'C3'],[W*0.5+52,H-75,'C4'],
+    [W-130,49,'C5'],[W-85,H-58,'C6'],[W*0.5-33,H*0.47,'C7'],[W*0.72,H*0.72,'C8'],
+    [W*0.5+17,10,'Y1'],[W-208,H-75,'Y2'],[W*0.28,H*0.57,'Y3'],
+    [W*0.5-24,H-50,'J1'],[16,H*0.5+63,'J2'],[W-95,H*0.5-32,'J3'],[W*0.38,H*0.15,'J4'],
+    [W-62,H*0.5-68,'HS1'],
+  ];
+  labels.forEach(function(l) { b.fillText(l[2], l[0], l[1]); });
+
+  // ── Coil / Inductor ──
+  var coilX = W * 0.15, coilY = H * 0.9;
+  b.strokeStyle = '#8a6a20'; b.lineWidth = 1.5;
+  for (var ci = 0; ci < 5; ci++) {
+    b.beginPath();
+    b.arc(coilX + ci * 6, coilY, 5, Math.PI, 0);
+    b.stroke();
+  }
+  b.fillStyle = '#8a9a50';
+  b.fillRect(coilX - 3, coilY, 2, 4);
+  b.fillRect(coilX + 4 * 6 + 5, coilY, 2, 4);
+
+  // ── Battery holder ──
+  var batX = W * 0.85, batY = H * 0.22;
+  b.beginPath(); b.arc(batX, batY, 14, 0, Math.PI * 2);
+  b.fillStyle = '#333328'; b.fill();
+  b.strokeStyle = '#554422'; b.lineWidth = 1.5; b.stroke();
+  b.strokeStyle = '#666650'; b.lineWidth = 0.8;
+  b.beginPath(); b.arc(batX, batY, 10, 0, Math.PI * 2); b.stroke();
+  b.fillStyle = '#aa9940'; b.font = '8px sans-serif'; b.textAlign = 'center';
+  b.fillText('+', batX, batY + 3);
+  b.fillStyle = 'rgba(210,225,210,0.32)'; b.font = '6px "Courier New", monospace';
+  b.fillText('BT1', batX - 5, batY + 20);
+  b.textAlign = 'left';
 }
 
 // ── Draw floppy disk ──────────────────────────────────────────────────────────
@@ -174,196 +433,127 @@ function drawFloppy(cx, cy, angle) {
   ctx.rotate(angle);
   ctx.translate(-FW / 2, -FH / 2);
 
-  var x = 0, y = 0, w = FW, h = FH;
-  var r = 4; // corner radius
+  var x = 0, y = 0, w = FW, h = FH, r = 4;
 
-  // Body shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.4)';
-  ctx.beginPath();
-  ctx.roundRect(x + 2, y + 2, w, h, r);
-  ctx.fill();
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.roundRect(x + 2, y + 2, w, h, r); ctx.fill();
 
   // Body
   ctx.fillStyle = '#222222';
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.fill();
-
-  // Body highlight (top edge)
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
   ctx.fillStyle = '#383838';
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, 3, [r, r, 0, 0]);
-  ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x, y, w, 3, [r, r, 0, 0]); ctx.fill();
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.stroke();
 
-  // Body outline
-  ctx.strokeStyle = '#444';
-  ctx.lineWidth = 0.5;
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.stroke();
-
-  // Label area (top portion)
+  // Label
   var lx = x + 4, ly = y + 4, lw = w - 8, lh = 18;
-  ctx.fillStyle = '#e8e8e0';
-  ctx.fillRect(lx, ly, lw, lh);
-
-  // Label colored stripes
-  var stripeColors = ['#b03030', '#3060b0', '#20882a'];
-  stripeColors.forEach(function(col, i) {
-    ctx.fillStyle = col;
-    ctx.fillRect(lx, ly + lh - 5 + i * 1.5, lw, 2);
+  ctx.fillStyle = '#e8e8e0'; ctx.fillRect(lx, ly, lw, lh);
+  ['#b03030','#3060b0','#20882a'].forEach(function(col, i) {
+    ctx.fillStyle = col; ctx.fillRect(lx, ly + lh - 5 + i * 1.5, lw, 2);
   });
-
-  // Label text
-  ctx.fillStyle = '#111';
-  ctx.font = 'bold 5px "Courier New", monospace';
-  ctx.fillText('HD  1.44MB', lx + 2, ly + 9);
+  ctx.fillStyle = '#111'; ctx.font = 'bold 5px "Courier New", monospace';
+  ctx.textAlign = 'left'; ctx.fillText('HD  1.44MB', lx + 2, ly + 9);
   ctx.font = '4px "Courier New", monospace';
   ctx.fillText('DOS FORMAT', lx + 2, ly + 15);
 
-  // Metal shutter slot (center)
+  // Metal shutter
   var sx = x + 8, sy = ly + lh + 2, sw = w - 14, sh = 14;
-  ctx.fillStyle = '#555560';
-  ctx.fillRect(sx, sy, sw, sh);
-  // Shutter opening
-  ctx.fillStyle = '#111118';
-  ctx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
-  // Shutter highlight
-  ctx.fillStyle = '#888890';
-  ctx.fillRect(sx, sy, sw, 2);
+  ctx.fillStyle = '#555560'; ctx.fillRect(sx, sy, sw, sh);
+  ctx.fillStyle = '#111118'; ctx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+  ctx.fillStyle = '#888890'; ctx.fillRect(sx, sy, sw, 2);
 
-  // Write-protect notch (top-right corner cutout visual)
-  ctx.fillStyle = '#111';
-  ctx.fillRect(x + w - 8, y, 6, 6);
-  ctx.fillStyle = '#0a1a0a'; // show through to PCB color
-  ctx.fillRect(x + w - 7, y + 1, 4, 4);
-  // notch hole
-  ctx.fillStyle = '#000';
-  ctx.beginPath();
-  ctx.arc(x + w - 5, y + 3, 2, 0, Math.PI * 2);
-  ctx.fill();
+  // Write-protect notch
+  ctx.fillStyle = '#111'; ctx.fillRect(x + w - 8, y, 6, 6);
+  ctx.fillStyle = '#0c1c0c'; ctx.fillRect(x + w - 7, y + 1, 4, 4);
+  ctx.fillStyle = '#000'; ctx.beginPath();
+  ctx.arc(x + w - 5, y + 3, 2, 0, Math.PI * 2); ctx.fill();
 
   ctx.restore();
 }
 
-// ── Draw ISA expansion card (obstacle) ───────────────────────────────────────
+// ── Draw ISA expansion card ───────────────────────────────────────────────────
 function drawCard(x, y, height, isTop) {
-  var w = 52; // card width
   if (height <= 0) return;
+  var w = 52;
 
-  // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.fillRect(x + 3, y + 3, w, height);
 
-  // Card PCB body
-  ctx.fillStyle = '#2e5c2e';
-  ctx.fillRect(x, y, w, height);
+  ctx.fillStyle = '#2e5c2e'; ctx.fillRect(x, y, w, height);
+  ctx.fillStyle = '#3a7a3a'; ctx.fillRect(x, y, 2, height);
+  ctx.fillStyle = '#1e3e1e'; ctx.fillRect(x + w - 2, y, 2, height);
 
-  // Card edge highlight
-  ctx.fillStyle = '#3a7a3a';
-  ctx.fillRect(x, y, 2, height);
-  ctx.fillStyle = '#1e3e1e';
-  ctx.fillRect(x + w - 2, y, 2, height);
+  // bracket
+  ctx.fillStyle = '#9a9a8a'; ctx.fillRect(x + w, y, 6, height);
+  ctx.fillStyle = '#c0c0b0'; ctx.fillRect(x + w, y, 2, height);
+  ctx.fillStyle = '#707068'; ctx.fillRect(x + w + 4, y, 2, height);
 
-  // Bracket (metal strip on the side)
-  ctx.fillStyle = '#9a9a8a';
-  ctx.fillRect(x + w, y, 6, height);
-  ctx.fillStyle = '#c0c0b0';
-  ctx.fillRect(x + w, y, 2, height);
-  ctx.fillStyle = '#707068';
-  ctx.fillRect(x + w + 4, y, 2, height);
-
-  // Components on card (chips)
+  // chips on card
   var numChips = Math.max(1, Math.floor(height / 40));
   for (var i = 0; i < numChips; i++) {
     var cy2 = y + 10 + i * 36;
     if (cy2 + 20 > y + height - 5) break;
-    ctx.fillStyle = '#1a1a18';
-    ctx.fillRect(x + 8, cy2, 22, 12);
-    ctx.fillStyle = '#2a2a24';
-    ctx.fillRect(x + 9, cy2 + 1, 20, 5);
-    // pins
+    ctx.fillStyle = '#1a1a18'; ctx.fillRect(x + 6, cy2, 24, 12);
+    ctx.fillStyle = '#2a2a24'; ctx.fillRect(x + 7, cy2 + 1, 22, 5);
     for (var p = 0; p < 4; p++) {
       ctx.fillStyle = '#8a9a50';
-      ctx.fillRect(x + 10 + p * 5, cy2 - 2, 2, 3);
-      ctx.fillRect(x + 10 + p * 5, cy2 + 12, 2, 3);
+      ctx.fillRect(x + 8 + p * 5, cy2 - 2, 2, 3);
+      ctx.fillRect(x + 8 + p * 5, cy2 + 12, 2, 3);
     }
-    // capacitor nearby
-    ctx.fillStyle = '#5a3a10';
-    ctx.fillRect(x + 34, cy2, 8, 14);
-    ctx.fillStyle = '#7a5a20';
-    ctx.fillRect(x + 35, cy2 + 1, 6, 4);
+    // cap
+    ctx.fillStyle = '#1e4a7a';
+    ctx.beginPath(); ctx.arc(x + 38, cy2 + 7, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#0e2a4a'; ctx.lineWidth = 0.5; ctx.stroke();
   }
 
-  // ISA connector teeth (at the card edge facing the gap)
+  // ISA connector teeth
   var toothY = isTop ? y + height - 10 : y;
-  var toothH = 10;
-  var toothW = 4;
   for (var t = 0; t < 10; t++) {
     var tx = x + 2 + t * 5;
-    if (tx + toothW > x + w - 4) break;
+    if (tx + 4 > x + w - 4) break;
     ctx.fillStyle = t % 2 === 0 ? '#d0c890' : '#706858';
-    ctx.fillRect(tx, toothY, toothW, toothH);
-    // gold contact stripe
+    ctx.fillRect(tx, toothY, 4, 10);
     if (t % 2 === 0) {
-      ctx.fillStyle = '#b8a040';
-      ctx.fillRect(tx + 1, toothY + 2, 2, toothH - 4);
+      ctx.fillStyle = '#b8a040'; ctx.fillRect(tx + 1, toothY + 2, 2, 6);
     }
   }
 
-  // Card top/bottom border (bracket edge)
   ctx.fillStyle = '#8a8a7a';
-  if (isTop) {
-    ctx.fillRect(x - 1, y, w + 8, 5);
-  } else {
-    ctx.fillRect(x - 1, y + height - 5, w + 8, 5);
-  }
+  if (isTop) ctx.fillRect(x - 1, y, w + 8, 5);
+  else ctx.fillRect(x - 1, y + height - 5, w + 8, 5);
 }
 
-// ── Glowing text helper ───────────────────────────────────────────────────────
-function glowText(text, x, y, size, col, glowCol) {
+// ── Glow text helpers ─────────────────────────────────────────────────────────
+function glowText(text, x, y, size, col, gc) {
   ctx.font = 'bold ' + size + 'px "Courier New", monospace';
-  ctx.textAlign = 'center';
-  ctx.shadowColor = glowCol || col;
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = col;
-  ctx.fillText(text, x, y);
-  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center'; ctx.shadowColor = gc || col; ctx.shadowBlur = 12;
+  ctx.fillStyle = col; ctx.fillText(text, x, y); ctx.shadowBlur = 0;
 }
-
-function glowTextLeft(text, x, y, size, col, glowCol) {
+function glowTextL(text, x, y, size, col, gc) {
   ctx.font = 'bold ' + size + 'px "Courier New", monospace';
-  ctx.textAlign = 'left';
-  ctx.shadowColor = glowCol || col;
-  ctx.shadowBlur = 10;
-  ctx.fillStyle = col;
-  ctx.fillText(text, x, y);
-  ctx.shadowBlur = 0;
+  ctx.textAlign = 'left'; ctx.shadowColor = gc || col; ctx.shadowBlur = 10;
+  ctx.fillStyle = col; ctx.fillText(text, x, y); ctx.shadowBlur = 0;
 }
-
-function glowTextRight(text, x, y, size, col, glowCol) {
+function glowTextR(text, x, y, size, col, gc) {
   ctx.font = 'bold ' + size + 'px "Courier New", monospace';
-  ctx.textAlign = 'right';
-  ctx.shadowColor = glowCol || col;
-  ctx.shadowBlur = 10;
-  ctx.fillStyle = col;
-  ctx.fillText(text, x, y);
-  ctx.shadowBlur = 0;
+  ctx.textAlign = 'right'; ctx.shadowColor = gc || col; ctx.shadowBlur = 10;
+  ctx.fillStyle = col; ctx.fillText(text, x, y); ctx.shadowBlur = 0;
 }
 
-// ── Draw UI overlay ───────────────────────────────────────────────────────────
+// ── Draw UI ───────────────────────────────────────────────────────────────────
 function drawUI() {
-  glowTextLeft('LVL: ' + level, 10, 28, 14, '#44ff44', '#00ff00');
-  glowTextRight('SCORE: ' + score, W - 10, 28, 14, '#44ff44', '#00ff00');
+  glowTextL('LVL: ' + level, 10, 28, 14, '#44ff44', '#00ff00');
+  glowTextR('SCORE: ' + score, W - 10, 28, 14, '#44ff44', '#00ff00');
 }
 
-// ── Pipe/card helpers ─────────────────────────────────────────────────────────
-var CARD_W = 58; // visual width including bracket
+// ── Pipes ─────────────────────────────────────────────────────────────────────
+var CARD_W = 58;
 
 function addPipe() {
   var def = getLevelDef(level);
-  var minTop = 60;
-  var maxTop = H - def.gap - 60;
+  var minTop = 60, maxTop = H - def.gap - 60;
   var topH = minTop + Math.random() * (maxTop - minTop);
   pipes.push({ x: W, topH: topH, scored: false });
 }
@@ -371,27 +561,17 @@ function addPipe() {
 function updatePipes() {
   var def = getLevelDef(level);
   sinceLastPipe++;
-  if (sinceLastPipe >= def.interval) {
-    addPipe();
-    sinceLastPipe = 0;
-  }
+  if (sinceLastPipe >= def.interval) { addPipe(); sinceLastPipe = 0; }
   for (var i = pipes.length - 1; i >= 0; i--) {
     pipes[i].x -= def.speed;
-    if (pipes[i].x + CARD_W < 0) {
-      pipes.splice(i, 1);
-      continue;
-    }
-    // Score
+    if (pipes[i].x + CARD_W < 0) { pipes.splice(i, 1); continue; }
     if (!pipes[i].scored && pipes[i].x + CARD_W < FX) {
       pipes[i].scored = true;
       score++;
-      // Level up every 5 points
       if (score > 0 && score % 5 === 0) {
-        var newLevel = Math.floor(score / 5) + 1;
-        if (newLevel > level) {
-          level = newLevel;
-          state = 'levelup';
-          levelupTimer = 90; // ~1.5 seconds at 60fps
+        var nl = Math.floor(score / 5) + 1;
+        if (nl > level) {
+          level = nl; state = 'levelup'; levelupTimer = 90;
         }
       }
     }
@@ -406,25 +586,16 @@ function drawPipes() {
   });
 }
 
-// ── Collision detection ───────────────────────────────────────────────────────
+// ── Collision ─────────────────────────────────────────────────────────────────
 function checkCollision() {
   var def = getLevelDef(level);
-  var fx1 = FX + HIT_INSET;
-  var fy1 = fy + HIT_INSET;
-  var fx2 = FX + FW - HIT_INSET;
-  var fy2 = fy + FH - HIT_INSET;
-
-  // Floor and ceiling
+  var fx1 = FX + HIT_INSET, fy1 = fy + HIT_INSET;
+  var fx2 = FX + FW - HIT_INSET, fy2 = fy + FH - HIT_INSET;
   if (fy1 < 0 || fy2 > H) return true;
-
   for (var i = 0; i < pipes.length; i++) {
     var p = pipes[i];
-    var px1 = p.x;
-    var px2 = p.x + CARD_W;
-    if (fx2 < px1 || fx1 > px2) continue;
-    // Top card
+    if (fx2 < p.x || fx1 > p.x + CARD_W) continue;
     if (fy1 < p.topH) return true;
-    // Bottom card
     if (fy2 > p.topH + def.gap) return true;
   }
   return false;
@@ -432,77 +603,52 @@ function checkCollision() {
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 function drawStart() {
-  // Background
   ctx.drawImage(bgCanvas, 0, 0);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
 
-  // Dim overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(0, 0, W, H);
-
-  // Title panel
-  var pw = 320, ph = 180;
+  var pw = 320, ph = 185;
   var px = (W - pw) / 2, py = (H - ph) / 2 - 20;
-  ctx.fillStyle = 'rgba(0,20,0,0.85)';
-  ctx.strokeStyle = '#00aa00';
-  ctx.lineWidth = 2;
-  ctx.fillRect(px, py, pw, ph);
-  ctx.strokeRect(px, py, pw, ph);
-  // inner border
-  ctx.strokeStyle = '#005500';
-  ctx.lineWidth = 1;
+  ctx.fillStyle = 'rgba(0,20,0,0.88)';
+  ctx.strokeStyle = '#00aa00'; ctx.lineWidth = 2;
+  ctx.fillRect(px, py, pw, ph); ctx.strokeRect(px, py, pw, ph);
+  ctx.strokeStyle = '#005500'; ctx.lineWidth = 1;
   ctx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
 
-  // Floppy preview
-  drawFloppy(W / 2 - FW / 2, py + 18, 0);
-
-  glowText('Floppy', W / 2, py + 90, 26, '#66ff66', '#00ff00');
-  glowText('v1.0', W / 2, py + 112, 12, '#339933', '#00aa00');
-
-  ctx.font = '11px "Courier New", monospace';
-  ctx.textAlign = 'center';
-  ctx.shadowColor = '#00ff00';
-  ctx.shadowBlur = 6;
-
-  // Blinking PRESS SPACE text
-  if (Math.floor(Date.now() / 500) % 2 === 0) {
-    ctx.fillStyle = '#aaffaa';
-    ctx.fillText('PRESS SPACE TO BOOT', W / 2, py + ph - 22);
-  }
-  ctx.shadowBlur = 0;
-
-  // Small instructions
-  ctx.fillStyle = '#336633';
-  ctx.font = '9px "Courier New", monospace';
-  ctx.fillText('SPACE / CLICK to flap', W / 2, py + ph + 20);
-  ctx.fillText('Navigate through expansion cards', W / 2, py + ph + 33);
-}
-
-function drawDead() {
-  // Draw last game frame (pipes already drawn in game loop)
-  // Overlay
-  ctx.fillStyle = 'rgba(80,0,0,0.6)';
-  ctx.fillRect(0, 0, W, H);
-
-  var pw = 300, ph = 150;
-  var px = (W - pw) / 2, py = (H - ph) / 2 - 10;
-  ctx.fillStyle = 'rgba(20,0,0,0.9)';
-  ctx.strokeStyle = '#ff2200';
-  ctx.lineWidth = 2;
-  ctx.fillRect(px, py, pw, ph);
-  ctx.strokeRect(px, py, pw, ph);
-  ctx.strokeStyle = '#660000';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
-
-  glowText('** SYSTEM CRASH **', W / 2, py + 35, 14, '#ff4444', '#ff0000');
-  glowText('SCORE: ' + score, W / 2, py + 62, 14, '#ff8844', '#ff4400');
-  glowText('LVL: ' + level, W / 2, py + 84, 12, '#ff6633', '#ff3300');
+  drawFloppy(W / 2 - FW / 2, py + 16, 0);
+  glowText('Floppy', W / 2, py + 94, 28, '#66ff66', '#00ff00');
+  glowText('v1.0', W / 2, py + 116, 12, '#339933', '#00aa00');
 
   if (Math.floor(Date.now() / 500) % 2 === 0) {
     ctx.font = '11px "Courier New", monospace';
     ctx.textAlign = 'center';
-    ctx.shadowColor = '#ff0000';
-    ctx.shadowBlur = 6;
+    ctx.shadowColor = '#00ff00'; ctx.shadowBlur = 6;
+    ctx.fillStyle = '#aaffaa';
+    ctx.fillText('PRESS SPACE TO BOOT', W / 2, py + ph - 24);
+    ctx.shadowBlur = 0;
+  }
+  ctx.fillStyle = '#336633'; ctx.font = '9px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SPACE / CLICK to flap', W / 2, py + ph + 18);
+  ctx.fillText('Navigate through expansion cards', W / 2, py + ph + 31);
+}
+
+function drawDead() {
+  ctx.fillStyle = 'rgba(80,0,0,0.6)'; ctx.fillRect(0, 0, W, H);
+  var pw = 300, ph = 150;
+  var px = (W - pw) / 2, py = (H - ph) / 2 - 10;
+  ctx.fillStyle = 'rgba(20,0,0,0.92)';
+  ctx.strokeStyle = '#ff2200'; ctx.lineWidth = 2;
+  ctx.fillRect(px, py, pw, ph); ctx.strokeRect(px, py, pw, ph);
+  ctx.strokeStyle = '#660000'; ctx.lineWidth = 1;
+  ctx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
+
+  glowText('** SYSTEM CRASH **', W / 2, py + 36, 14, '#ff4444', '#ff0000');
+  glowText('SCORE: ' + score, W / 2, py + 62, 14, '#ff8844', '#ff4400');
+  glowText('LVL: ' + level, W / 2, py + 84, 12, '#ff6633', '#ff3300');
+
+  if (Math.floor(Date.now() / 500) % 2 === 0) {
+    ctx.font = '11px "Courier New", monospace'; ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 6;
     ctx.fillStyle = '#ffaaaa';
     ctx.fillText('PRESS SPACE TO REBOOT', W / 2, py + ph - 18);
     ctx.shadowBlur = 0;
@@ -512,114 +658,77 @@ function drawDead() {
 function drawLevelUp() {
   if (levelFlash > 0) {
     var alpha = Math.min(1, levelFlash / 30);
-    ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.save(); ctx.globalAlpha = alpha;
     glowText('LEVEL ' + level + '!', W / 2, H / 2 - 10, 22, '#ffff44', '#ffaa00');
     glowText('SPEED INCREASED', W / 2, H / 2 + 18, 13, '#ffcc44', '#ff8800');
     ctx.restore();
   }
 }
 
-// ── Game init / reset ─────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 function initGame() {
-  score = 0;
-  level = 1;
-  fy = H / 2 - FH / 2;
-  fvy = 0;
-  pipes = [];
-  frameCount = 0;
-  sinceLastPipe = 60; // delay first pipe slightly
-  levelupTimer = 0;
-  levelFlash = 0;
+  score = 0; level = 1;
+  fy = H / 2 - FH / 2; fvy = 0;
+  pipes = []; frameCount = 0; sinceLastPipe = 60;
+  levelupTimer = 0; levelFlash = 0;
 }
 
-// ── Main game loop ────────────────────────────────────────────────────────────
-var lastTime = 0;
-
-function loop(ts) {
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function loop() {
   requestAnimationFrame(loop);
 
-  if (state === 'start') {
-    drawStart();
-    return;
-  }
+  if (state === 'start') { drawStart(); return; }
 
-  // Draw background
   ctx.drawImage(bgCanvas, 0, 0);
 
   if (state === 'playing' || state === 'levelup') {
-    // Physics
     if (state === 'playing') {
-      fvy += GRAVITY;
-      fy += fvy;
+      fvy += GRAVITY; fy += fvy;
     } else {
-      // During level-up: floppy hovers (slight float)
-      levelupTimer--;
-      levelFlash = levelupTimer;
+      levelupTimer--; levelFlash = levelupTimer;
       if (levelupTimer <= 0) state = 'playing';
-      // gentle gravity still
-      fvy += GRAVITY * 0.3;
-      fy += fvy;
+      fvy += GRAVITY * 0.3; fy += fvy;
     }
-
-    // Clamp velocity
     if (fvy > 10) fvy = 10;
-
-    // Update and draw pipes
     if (state === 'playing') updatePipes();
     drawPipes();
-
-    // Draw floppy
     var angle = Math.max(-0.4, Math.min(0.4, fvy * 0.06));
     drawFloppy(FX, fy, angle);
-
     if (state === 'levelup') drawLevelUp();
-
-    // Collision (only when playing, not during level-up freeze moment)
-    if (state === 'playing' && checkCollision()) {
-      state = 'dead';
-    }
-
+    if (state === 'playing' && checkCollision()) state = 'dead';
     drawUI();
-
   } else if (state === 'dead') {
-    drawPipes();
-    drawFloppy(FX, fy, 0.5); // tilted on crash
-    drawUI();
-    drawDead();
+    drawPipes(); drawFloppy(FX, fy, 0.5); drawUI(); drawDead();
   }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 function flap() {
-  if (state === 'start' || state === 'dead') {
-    initGame();
-    state = 'playing';
-    return;
-  }
-  if (state === 'playing') {
-    fvy = FLAP;
-  }
+  if (state === 'start' || state === 'dead') { initGame(); state = 'playing'; return; }
+  if (state === 'playing') fvy = FLAP;
 }
 
-document.addEventListener('keydown', function(e) {
+// Keyboard: listen on both canvas and document to catch events regardless of focus
+function onKey(e) {
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.key === ' ') {
-    e.preventDefault();
-    flap();
+    e.preventDefault(); flap();
   }
-});
-document.addEventListener('mousedown', function(e) {
-  e.preventDefault();
-  flap();
+}
+canvas.addEventListener('keydown', onKey);
+document.addEventListener('keydown', onKey);
+
+canvas.addEventListener('mousedown', function(e) {
+  e.preventDefault(); canvas.focus(); flap();
 });
 document.addEventListener('touchstart', function(e) {
-  e.preventDefault();
-  flap();
+  e.preventDefault(); flap();
 }, { passive: false });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 buildBackground();
 state = 'start';
+// Grab focus so Space works immediately without requiring a click first
+canvas.focus();
 requestAnimationFrame(loop);
 
 })();
