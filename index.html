@@ -48,8 +48,9 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     '/home/guest/Documents': { type: 'dir', children: [] },
     '/etc': { type: 'dir', restricted: true },
     '/usr': { type: 'dir', children: ['bin'] },
-    '/usr/bin': { type: 'dir', children: ['clock'] },
+    '/usr/bin': { type: 'dir', children: ['clock', 'floppy'] },
     '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock' },
+    '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy' },
     '/var': { type: 'dir', restricted: true },
     '/tmp': { type: 'dir', restricted: true }
   };
@@ -447,7 +448,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       for (var i = 0; i < lines.length; i++) lines[i].remove();
     },
     help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, clock, help, exit');
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, clock, floppy, help, exit');
     },
     echo: function(args) { addLine(args.join(' ')); },
     date: function() { addLine(formatDate(new Date())); },
