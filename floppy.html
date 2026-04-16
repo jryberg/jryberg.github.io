@@ -68,6 +68,8 @@ var score, level, levelFlashTimer;
 var fy, fvy;
 var pipes;
 var frameCount, sinceLastPipe;
+var lastTime = 0;
+var TARGET_DT = 1000 / 60;
 
 var FX = 120;
 var FW = 44, FH = 44;
@@ -558,12 +560,12 @@ function addPipe() {
   pipes.push({ x: W, topH: topH, scored: false });
 }
 
-function updatePipes() {
+function updatePipes(dt) {
   var def = getLevelDef(level);
-  sinceLastPipe++;
+  sinceLastPipe += dt;
   if (sinceLastPipe >= def.interval) { addPipe(); sinceLastPipe = 0; }
   for (var i = pipes.length - 1; i >= 0; i--) {
-    pipes[i].x -= def.speed;
+    pipes[i].x -= def.speed * dt;
     if (pipes[i].x + CARD_W < 0) { pipes.splice(i, 1); continue; }
     if (!pipes[i].scored && pipes[i].x + CARD_W < FX) {
       pipes[i].scored = true;
@@ -667,24 +669,31 @@ function initGame() {
   fy = H / 2 - FH / 2; fvy = 0;
   pipes = []; frameCount = 0; sinceLastPipe = 60;
   levelFlashTimer = 0;
+  lastTime = 0;
 }
 
 // ── Game loop ─────────────────────────────────────────────────────────────────
-function loop() {
+function loop(now) {
   requestAnimationFrame(loop);
+  if (!lastTime) { lastTime = now; }
+  var elapsed = now - lastTime;
+  lastTime = now;
+  var dt = elapsed / TARGET_DT;
+  if (dt > 3) dt = 3;
+  if (dt < 0.001) dt = 1;
 
   if (state === 'start') { drawStart(); return; }
 
   ctx.drawImage(bgCanvas, 0, 0);
 
   if (state === 'playing') {
-    fvy += GRAVITY; fy += fvy;
+    fvy += GRAVITY * dt; fy += fvy * dt;
     if (fvy > 10) fvy = 10;
-    updatePipes();
+    updatePipes(dt);
     drawPipes();
     var angle = Math.max(-0.4, Math.min(0.4, fvy * 0.06));
     drawFloppy(FX, fy, angle);
-    if (levelFlashTimer > 0) { levelFlashTimer--; drawLevelUp(); }
+    if (levelFlashTimer > 0) { levelFlashTimer -= dt; drawLevelUp(); }
     if (checkCollision()) state = 'dead';
     drawUI();
   } else if (state === 'dead') {
