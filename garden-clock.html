@@ -85,7 +85,7 @@ function mkMan(pal,speed,innerR,outerR,startFrac,phaseOff){
           rDir:startFrac<.5?1:-1,
           θ:0,facing:0,x:0,y:0,
           sweepPhase:phaseOff, sweepSpd:.25, brushR:BRUSH_R,
-          brSweepT:0 };
+          brSweepT:0, walkPhase:0, sweeping:false };
 }
 
 const HOUR_N=5500,MIN_N=5500;
@@ -121,6 +121,7 @@ const D_ANG=3.0,MAX_LAG=0.4,ADRAG=5.0,WALL=R*.882;
 const BRUSH_STR=2.0;
 function stepLeaves(leaves,a,hR,dt){
   const adf=Math.exp(-ADRAG*dt),vdf=Math.exp(-D_ANG*dt);
+  let maxLag=0;
   for(let i=0;i<leaves.length;i++){
     const lf=leaves[i];
     const oldθ=lf.θ;
@@ -130,6 +131,7 @@ function stepLeaves(leaves,a,hR,dt){
     if(dθ>MAX_LAG){lf.θ=a-MAX_LAG;dθ=MAX_LAG;}
     if(dθ<0){lf.θv=0;}
     else{
+      if(dθ>maxLag)maxLag=dθ;
       lf.θv*=vdf;
       if(lf.θv<0)lf.θv=0;
       lf.θ+=lf.θv*dt;
@@ -139,30 +141,39 @@ function stepLeaves(leaves,a,hR,dt){
     const r=Math.hypot(lf.x,lf.y);
     if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;lf.angV+=(Math.random()-.5)*9;}
   }
+  return maxLag;
 }
 
-function stepMan(man,grid,leaves,handAngle,hR,dt){
+const MIN_SWEEP_LAG=0.008;
+function stepMan(man,grid,leaves,handAngle,hR,dt,lag){
   man.rPos+=man.rDir*man.speed*dt;
   if(man.rPos>=man.outerR){man.rPos=man.outerR;man.rDir=-1;}
   if(man.rPos<=man.innerR){man.rPos=man.innerR;man.rDir=+1;}
+  man.walkPhase+=Math.abs(man.rDir*man.speed*dt)*0.4;
   man.θ=handAngle-BF_FRAC;
   man.x=Math.cos(man.θ)*man.rPos; man.y=Math.sin(man.θ)*man.rPos;
   man.facing=man.θ+Math.PI/2;
-  man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
-  const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
-  man.brSweepT=sweepT;
-  const brAng=man.θ+BF_FRAC+sweepT*SWEEP_ANG;
-  const brX=Math.cos(brAng)*man.rPos;
-  const brY=Math.sin(brAng)*man.rPos;
-  const sweepVel=Math.cos(man.sweepPhase), isPower=sweepVel>0;
-  const cands=near(grid,cx+brX,cy+brY,man.brushR);
-  for(let i=0;i<cands.length;i++){
-    const lf=cands[i];const dx=lf.x-brX,dy=lf.y-brY,d=Math.hypot(dx,dy);
-    if(d>=man.brushR)continue;
-    const proximity=1-d/man.brushR;
-    const str=BRUSH_STR*proximity*(isPower?60:5);
-    lf.θv+=str*dt;
-    lf.angV+=(Math.random()-.5)*(isPower?18:4);
+  if(lag>MIN_SWEEP_LAG)man.sweeping=true;
+  if(man.sweeping){
+    man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
+    const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
+    man.brSweepT=sweepT;
+    const brAng=man.θ+BF_FRAC+sweepT*SWEEP_ANG;
+    const brX=Math.cos(brAng)*man.rPos;
+    const brY=Math.sin(brAng)*man.rPos;
+    const sweepVel=Math.cos(man.sweepPhase), isPower=sweepVel>0;
+    const cands=near(grid,cx+brX,cy+brY,man.brushR);
+    for(let i=0;i<cands.length;i++){
+      const lf=cands[i];const dx=lf.x-brX,dy=lf.y-brY,d=Math.hypot(dx,dy);
+      if(d>=man.brushR)continue;
+      const proximity=1-d/man.brushR;
+      const str=BRUSH_STR*proximity*(isPower?60:5);
+      lf.θv+=str*dt;
+      lf.angV+=(Math.random()-.5)*(isPower?18:4);
+    }
+    if(lag<=MIN_SWEEP_LAG&&sweepT<-0.8)man.sweeping=false;
+  }else{
+    man.brSweepT=-1;
   }
 }
 
@@ -438,7 +449,7 @@ function drawMan(man){
   const sp=man.sweepPhase;
   ctx.save();
   ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
-  ctx.translate(0,Math.sin(sp*2)*s*.25);
+  ctx.translate(0,man.sweeping?Math.sin(sp*2)*s*.25:0);
   ctx.save(); ctx.translate(s*.8,s*.9);
   ctx.beginPath(); ctx.ellipse(0,0,s*8.5,s*6.5,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fill(); ctx.restore();
@@ -488,10 +499,11 @@ function drawMan(man){
   ctx.fillStyle='#1a0c06';
   ctx.beginPath(); ctx.arc(s*4.3,-s*.9,s*.9,0,Math.PI*2); ctx.fill();
   ctx.beginPath(); ctx.arc(s*4.3,s*.9,s*.9,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#1e0e08';
+  ctx.fillStyle=pal.pants;
+  const wp=man.walkPhase;
   for(const sd of[-1,1]){
-    const ff=Math.sin(sp+sd*Math.PI)*s*2.9;
-    ctx.beginPath(); ctx.ellipse(-s*4.2,sd*s*2.4+ff,s*2.8,s*2.0,.5,0,Math.PI*2); ctx.fill();
+    const stride=Math.sin(wp+sd*Math.PI/2)*s*1.8;
+    ctx.beginPath(); ctx.ellipse(-s*1.8,sd*s*2.2+stride,s*1.6,s*1.1,.15*sd,0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
@@ -512,10 +524,10 @@ init();
 function tick(ts){
   const dt=Math.min((ts-prevTs)/1000,.05); prevTs=ts;
   const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
-  stepLeaves(hL,hA,hR,dt); stepLeaves(mL,mA,mR,dt);
+  const hLag=stepLeaves(hL,hA,hR,dt), mLag=stepLeaves(mL,mA,mR,dt);
   fillGrid(hGrid,hL); fillGrid(mGrid,mL);
-  hMen.forEach(m=>stepMan(m,hGrid,hL,hA,hR,dt));
-  mMen.forEach(m=>stepMan(m,mGrid,mL,mA,mR,dt));
+  hMen.forEach(m=>stepMan(m,hGrid,hL,hA,hR,dt,hLag));
+  mMen.forEach(m=>stepMan(m,mGrid,mL,mA,mR,dt,mLag));
 
   ctx.clearRect(0,0,SZ,SZ);
   ctx.drawImage(bgCanvas,0,0); // garden + stones + clock face (one blit)
@@ -528,7 +540,7 @@ function tick(ts){
   [...hMen,...mMen].forEach(man=>{
     const s=man.pal===PAL.h?1.65:1.38, sp=man.sweepPhase;
     ctx.save(); ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
-    ctx.translate(0,Math.sin(sp*2)*s*.25);
+    ctx.translate(0,man.sweeping?Math.sin(sp*2)*s*.25:0);
     ctx.fillStyle=man.pal.hair; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='rgba(255,255,255,.14)'; ctx.beginPath(); ctx.arc(s*1.9,-s*1.4,s*1.6,0,Math.PI*2); ctx.fill();
     ctx.fillStyle=man.pal.skin; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,-Math.PI*.40,Math.PI*.40); ctx.fill();
