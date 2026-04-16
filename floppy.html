@@ -64,7 +64,7 @@ function getLevelDef(lv) { return LEVELS[Math.min(lv - 1, LEVELS.length - 1)]; }
 
 // ── Game state ────────────────────────────────────────────────────────────────
 var state;
-var score, level, levelupTimer, levelFlash;
+var score, level, levelFlashTimer;
 var fy, fvy;
 var pipes;
 var frameCount, sinceLastPipe;
@@ -570,9 +570,7 @@ function updatePipes() {
       score++;
       if (score > 0 && score % 5 === 0) {
         var nl = Math.floor(score / 5) + 1;
-        if (nl > level) {
-          level = nl; state = 'levelup'; levelupTimer = 90;
-        }
+        if (nl > level) { level = nl; levelFlashTimer = 90; }
       }
     }
   }
@@ -656,13 +654,11 @@ function drawDead() {
 }
 
 function drawLevelUp() {
-  if (levelFlash > 0) {
-    var alpha = Math.min(1, levelFlash / 30);
-    ctx.save(); ctx.globalAlpha = alpha;
-    glowText('LEVEL ' + level + '!', W / 2, H / 2 - 10, 22, '#ffff44', '#ffaa00');
-    glowText('SPEED INCREASED', W / 2, H / 2 + 18, 13, '#ffcc44', '#ff8800');
-    ctx.restore();
-  }
+  var alpha = Math.min(1, levelFlashTimer / 30);
+  ctx.save(); ctx.globalAlpha = alpha;
+  glowText('LEVEL ' + level + '!', W / 2, H / 2 - 10, 22, '#ffff44', '#ffaa00');
+  glowText('SPEED INCREASED', W / 2, H / 2 + 18, 13, '#ffcc44', '#ff8800');
+  ctx.restore();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -670,7 +666,7 @@ function initGame() {
   score = 0; level = 1;
   fy = H / 2 - FH / 2; fvy = 0;
   pipes = []; frameCount = 0; sinceLastPipe = 60;
-  levelupTimer = 0; levelFlash = 0;
+  levelFlashTimer = 0;
 }
 
 // ── Game loop ─────────────────────────────────────────────────────────────────
@@ -681,21 +677,15 @@ function loop() {
 
   ctx.drawImage(bgCanvas, 0, 0);
 
-  if (state === 'playing' || state === 'levelup') {
-    if (state === 'playing') {
-      fvy += GRAVITY; fy += fvy;
-    } else {
-      levelupTimer--; levelFlash = levelupTimer;
-      if (levelupTimer <= 0) state = 'playing';
-      fvy += GRAVITY * 0.3; fy += fvy;
-    }
+  if (state === 'playing') {
+    fvy += GRAVITY; fy += fvy;
     if (fvy > 10) fvy = 10;
-    if (state === 'playing') updatePipes();
+    updatePipes();
     drawPipes();
     var angle = Math.max(-0.4, Math.min(0.4, fvy * 0.06));
     drawFloppy(FX, fy, angle);
-    if (state === 'levelup') drawLevelUp();
-    if (state === 'playing' && checkCollision()) state = 'dead';
+    if (levelFlashTimer > 0) { levelFlashTimer--; drawLevelUp(); }
+    if (checkCollision()) state = 'dead';
     drawUI();
   } else if (state === 'dead') {
     drawPipes(); drawFloppy(FX, fy, 0.5); drawUI(); drawDead();
