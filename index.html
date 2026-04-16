@@ -714,7 +714,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       for (var i = 0; i < lines.length; i++) lines[i].remove();
     },
     help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, clock, floppy, help, exit');
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, man, clock, floppy, help, exit');
     },
     echo: function(args) { addLine(args.join(' ')); },
     date: function() { addLine(formatDate(new Date())); },
@@ -759,6 +759,44 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
         var job = jobs[jobIds[i]];
         var status = job.status === 'running' ? 'Running' : 'Done';
         addLine('[' + job.jobId + ']+  ' + status + '                 ' + job.command + (job.status === 'running' ? ' &' : ''));
+      }
+    },
+    man: function(args) {
+      if (!args.length) { addLine('What manual page do you want?'); return; }
+      var page = args[0];
+      if (page === 'sl') {
+        addLine('SL(1)                     General Commands Manual                    SL(1)');
+        addLine('');
+        addLine('NAME');
+        addLine('       sl - cure your bad habit of mistyping');
+        addLine('');
+        addLine('SYNOPSIS');
+        addLine('       sl [-alFc]');
+        addLine('');
+        addLine('DESCRIPTION');
+        addLine('       sl is a highly advanced animation program for curing your bad habit');
+        addLine('       of mistyping.');
+        addLine('');
+        addLine('       -a     An accident is occurring. People cry for help.');
+        addLine('');
+        addLine('       -l     Little version.');
+        addLine('');
+        addLine('       -F     It flies like the galaxy express 999.');
+        addLine('');
+        addLine('       -c     C51 appears instead of D51.');
+        addLine('');
+        addLine('SEE ALSO');
+        addLine('       ls(1)');
+        addLine('');
+        addLine('BUGS');
+        addLine('       It sometimes lists directory contents.');
+        addLine('');
+        addLine('AUTHOR');
+        addLine('       Toyoda Masashi (mtoyoda@acm.org)');
+        addLine('');
+        addLine('                            March 31, 2014                            SL(1)');
+      } else {
+        addLine('No manual entry for ' + page);
       }
     },
     sudo: function() { addLine('[sudo] password for guest: '); addLine('guest is not in the sudoers file. This incident will be reported.'); },
