@@ -572,7 +572,7 @@ function updatePipes(dt) {
       score++;
       if (score > 0 && score % 5 === 0) {
         var nl = Math.floor(score / 5) + 1;
-        if (nl > level) { level = nl; levelFlashTimer = 90; }
+        if (nl > level) { level = nl; levelFlashTimer = 240; }
       }
     }
   }
@@ -656,8 +656,10 @@ function drawDead() {
 }
 
 function drawLevelUp() {
-  var alpha = Math.min(1, levelFlashTimer / 30);
+  var alpha = Math.max(0, Math.min(1, levelFlashTimer / 60));
   ctx.save(); ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(W / 2 - 130, H / 2 - 32, 260, 66);
   glowText('LEVEL ' + level + '!', W / 2, H / 2 - 10, 22, '#ffff44', '#ffaa00');
   glowText('SPEED INCREASED', W / 2, H / 2 + 18, 13, '#ffcc44', '#ff8800');
   ctx.restore();
@@ -693,7 +695,7 @@ function loop(now) {
     drawPipes();
     var angle = Math.max(-0.4, Math.min(0.4, fvy * 0.06));
     drawFloppy(FX, fy, angle);
-    if (levelFlashTimer > 0) { levelFlashTimer -= dt; drawLevelUp(); }
+    if (levelFlashTimer > 0) { drawLevelUp(); levelFlashTimer -= dt; }
     if (checkCollision()) state = 'dead';
     drawUI();
   } else if (state === 'dead') {
