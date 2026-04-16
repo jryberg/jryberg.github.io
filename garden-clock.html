@@ -77,15 +77,15 @@ const PAL={
   m:{skin:'#f4c186',shirt:'#186038',pants:'#243520',hair:'#3a2010',broom:'#7a5828'},
 };
 
-const BF_FRAC=0.22, BRUSH_R=8;
+const BF_FRAC=0.22, BRUSH_R=4, SWEEP_ANG=0.2;
 
 function mkMan(pal,speed,innerR,outerR,startFrac,phaseOff){
   return{ pal,speed,innerR,outerR,
           rPos:innerR+(outerR-innerR)*startFrac,
           rDir:startFrac<.5?1:-1,
           θ:0,facing:0,x:0,y:0,
-          sweepPhase:phaseOff, sweepSpd:.46, sweepRange:10, brushR:BRUSH_R,
-          brSweepFwd:0 };
+          sweepPhase:phaseOff, sweepSpd:.25, brushR:BRUSH_R,
+          brSweepT:0 };
 }
 
 const HOUR_N=5500,MIN_N=5500;
@@ -113,26 +113,28 @@ function init(){
   const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
   hL=Array.from({length:HOUR_N},(_,i)=>mkLeaf(i,HOUR_N,hA,hR));
   mL=Array.from({length:MIN_N}, (_,i)=>mkLeaf(i,MIN_N, mA,mR));
-  hMen=[ mkMan(PAL.h,12,hR*.04,hR*.96,0.0,0) ];
-  mMen=[ mkMan(PAL.m,18,mR*.04,mR*.52,0.0,0), mkMan(PAL.m,18,mR*.48,mR*.96,1.0,Math.PI) ];
+  hMen=[ mkMan(PAL.h,6,hR*.04,hR*.96,0.0,0) ];
+  mMen=[ mkMan(PAL.m,10,mR*.04,mR*.52,0.0,0), mkMan(PAL.m,10,mR*.48,mR*.96,1.0,Math.PI) ];
 }
 
-const K_ANG=8.0,D_ANG=2*Math.sqrt(K_ANG),MAX_LAG=0.15,ADRAG=5.0,WALL=R*.882;
-const BRUSH_STR=0.08;
+const D_ANG=3.0,MAX_LAG=0.4,ADRAG=5.0,WALL=R*.882;
+const BRUSH_STR=2.0;
 function stepLeaves(leaves,a,hR,dt){
-  const adf=Math.exp(-ADRAG*dt);
+  const adf=Math.exp(-ADRAG*dt),vdf=Math.exp(-D_ANG*dt);
   for(let i=0;i<leaves.length;i++){
     const lf=leaves[i];
+    const oldθ=lf.θ;
     let dθ=a-lf.θ;
     if(dθ>Math.PI)dθ-=2*Math.PI;
     if(dθ<-Math.PI)dθ+=2*Math.PI;
-    if(dθ<0){lf.θ=a;lf.θv=0;dθ=0;}
     if(dθ>MAX_LAG){lf.θ=a-MAX_LAG;dθ=MAX_LAG;}
-    lf.θv+=(K_ANG*dθ-D_ANG*lf.θv)*dt;
-    if(lf.θv<0)lf.θv=0;
-    lf.θ+=lf.θv*dt;
-    if(lf.θ>a){lf.θ=a;lf.θv=0;}
-    if(dθ>0.0005||lf.θv>0.0005){const pos=leafPos(lf.θ,lf.t,hR,lf.pOff);lf.x=pos.x;lf.y=pos.y;}
+    if(dθ<0){lf.θv=0;}
+    else{
+      lf.θv*=vdf;
+      if(lf.θv<0)lf.θv=0;
+      lf.θ+=lf.θv*dt;
+    }
+    if(lf.θ!==oldθ){const pos=leafPos(lf.θ,lf.t,hR,lf.pOff);lf.x=pos.x;lf.y=pos.y;}
     lf.angV*=adf; lf.ang+=lf.angV*dt;
     const r=Math.hypot(lf.x,lf.y);
     if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;lf.angV+=(Math.random()-.5)*9;}
@@ -148,20 +150,19 @@ function stepMan(man,grid,leaves,handAngle,hR,dt){
   man.facing=man.θ+Math.PI/2;
   man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
   const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
-  const fwdX=-Math.sin(man.θ),fwdY=Math.cos(man.θ);
-  const bFwd=BF_FRAC*man.rPos, sweepFwd=sweepT*man.sweepRange;
-  man.brSweepFwd=sweepFwd;
-  const brX=man.x+fwdX*(bFwd+sweepFwd);
-  const brY=man.y+fwdY*(bFwd+sweepFwd);
+  man.brSweepT=sweepT;
+  const brAng=man.θ+BF_FRAC+sweepT*SWEEP_ANG;
+  const brX=Math.cos(brAng)*man.rPos;
+  const brY=Math.sin(brAng)*man.rPos;
   const sweepVel=Math.cos(man.sweepPhase), isPower=sweepVel>0;
   const cands=near(grid,cx+brX,cy+brY,man.brushR);
   for(let i=0;i<cands.length;i++){
     const lf=cands[i];const dx=lf.x-brX,dy=lf.y-brY,d=Math.hypot(dx,dy);
     if(d>=man.brushR)continue;
     const proximity=1-d/man.brushR;
-    const str=BRUSH_STR*proximity*(isPower?60:15);
+    const str=BRUSH_STR*proximity*(isPower?60:5);
     lf.θv+=str*dt;
-    lf.angV+=(Math.random()-.5)*(isPower?18:6);
+    lf.angV+=(Math.random()-.5)*(isPower?18:4);
   }
 }
 
@@ -435,24 +436,23 @@ function drawLeaves(leaves){
 function drawMan(man){
   const pal=man.pal; const s=pal===PAL.h?1.65:1.38;
   const sp=man.sweepPhase;
-  const raw=Math.sin(sp),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
   ctx.save();
   ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
   ctx.translate(0,Math.sin(sp*2)*s*.25);
   ctx.save(); ctx.translate(s*.8,s*.9);
   ctx.beginPath(); ctx.ellipse(0,0,s*8.5,s*6.5,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fill(); ctx.restore();
-  const bFwd=BF_FRAC*man.rPos, bhX=bFwd+(man.brSweepFwd||0), bhY=Math.sin(man.sweepPhase*.7)*2.5*s;
-  const hAng=Math.atan2(bhY,bhX-s*4.5), hPerp=hAng+Math.PI/2, hw=s*8;
-  ctx.strokeStyle=pal.broom; ctx.lineWidth=s*1.8; ctx.lineCap='round';
+  const sweepT=man.brSweepT||0, bhX=(BF_FRAC+sweepT*SWEEP_ANG)*man.rPos, bhY=Math.sin(man.sweepPhase*.7)*1.5*s;
+  const hAng=Math.atan2(bhY,bhX-s*4.5), hPerp=hAng+Math.PI/2, hw=s*5;
+  ctx.strokeStyle=pal.broom; ctx.lineWidth=s*1.4; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(s*4.5,0); ctx.lineTo(bhX,bhY); ctx.stroke();
-  ctx.strokeStyle='#5a3408'; ctx.lineWidth=s*3.5; ctx.lineCap='round';
+  ctx.strokeStyle='#5a3408'; ctx.lineWidth=s*2.5; ctx.lineCap='round';
   ctx.beginPath();
   ctx.moveTo(bhX+Math.cos(hPerp)*hw,bhY+Math.sin(hPerp)*hw);
   ctx.lineTo(bhX-Math.cos(hPerp)*hw,bhY-Math.sin(hPerp)*hw); ctx.stroke();
-  for(let k=-6;k<=6;k++){
-    const bpx=bhX+Math.cos(hPerp)*hw*(k/6),bpy=bhY+Math.sin(hPerp)*hw*(k/6);
-    ctx.beginPath(); ctx.arc(bpx+Math.cos(hAng)*s*1.5,bpy+Math.sin(hAng)*s*1.5,s*.8,0,Math.PI*2);
+  for(let k=-4;k<=4;k++){
+    const bpx=bhX+Math.cos(hPerp)*hw*(k/4),bpy=bhY+Math.sin(hPerp)*hw*(k/4);
+    ctx.beginPath(); ctx.arc(bpx+Math.cos(hAng)*s*1.2,bpy+Math.sin(hAng)*s*1.2,s*.6,0,Math.PI*2);
     ctx.fillStyle=k%2===0?pal.broom:'#c09838'; ctx.fill();
   }
   ctx.fillStyle=pal.shirt;
