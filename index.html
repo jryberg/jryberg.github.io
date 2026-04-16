@@ -42,19 +42,19 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 
   // Virtual filesystem
   var fs = {
-    '/': { type: 'dir', children: ['home', 'etc', 'usr', 'var', 'tmp'] },
-    '/home': { type: 'dir', children: ['guest'] },
-    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'Documents'] },
-    '/home/guest/contact.txt': { type: 'file', content: 'johan@ryberg.se\n' },
-    '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n' },
-    '/home/guest/Documents': { type: 'dir', children: [] },
-    '/etc': { type: 'dir', restricted: true },
-    '/usr': { type: 'dir', children: ['bin'] },
-    '/usr/bin': { type: 'dir', children: ['clock', 'floppy'] },
-    '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock' },
-    '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy' },
-    '/var': { type: 'dir', restricted: true },
-    '/tmp': { type: 'dir', restricted: true }
+    '/': { type: 'dir', children: ['home', 'etc', 'usr', 'var', 'tmp'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/home': { type: 'dir', children: ['guest'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'Documents'], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
+    '/home/guest/contact.txt': { type: 'file', content: 'johan@ryberg.se\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
+    '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
+    '/home/guest/Documents': { type: 'dir', children: [], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
+    '/etc': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/usr': { type: 'dir', children: ['bin'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/usr/bin': { type: 'dir', children: ['clock', 'floppy'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
+    '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
+    '/var': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/tmp': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxrwxrwt' }
   };
 
   var cwd = '/home/guest';
@@ -636,7 +636,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       if (!entry) { addLine('ls: cannot access \'' + (target || '.') + '\': No such file or directory'); return; }
       if (entry.type === 'file') {
         if (showLong) {
-          addLine('-rw-r--r-- 1 guest guest ' + entry.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + path.split('/').pop());
+          addLine((entry.mode || '-rw-r--r--') + ' 1 ' + (entry.owner || 'guest').padEnd(5) + ' ' + (entry.group || 'guest').padEnd(5) + ' ' + entry.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + path.split('/').pop());
         } else {
           addLine(path.split('/').pop());
         }
@@ -651,10 +651,15 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
           var childPath = (path === '/' ? '' : path) + '/' + name;
           var child = fs[childPath];
           var isDir = name === '.' || name === '..' || (child && child.type === 'dir');
+          var ref = (name === '.' || name === '..') ? entry : child;
+          var owner = (ref && ref.owner || 'root').padEnd(5);
+          var group = (ref && ref.group || 'root').padEnd(5);
           if (isDir) {
-            addLineWithDirName('drwxr-xr-x 2 guest guest 4096 Mar  1 12:00 ', name);
+            var dmode = ref && ref.mode || 'drwxr-xr-x';
+            addLineWithDirName(dmode + ' 2 ' + owner + ' ' + group + ' 4096 Mar  1 12:00 ', name);
           } else if (child && child.type === 'file') {
-            addLine('-rw-r--r-- 1 guest guest ' + child.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + name);
+            var fmode = child.mode || '-rw-r--r--';
+            addLine(fmode + ' 1 ' + owner + ' ' + group + ' ' + child.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + name);
           }
         });
       } else {
