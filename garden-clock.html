@@ -63,12 +63,13 @@ function gauss(σ){const u=Math.random()||1e-10,v=Math.random();return σ*Math.s
 function shadeCol(hex,a){const n=parseInt(hex.replace('#',''),16);return`rgb(${Math.min(255,Math.max(0,(n>>16)+a))},${Math.min(255,Math.max(0,((n>>8)&0xff)+a))},${Math.min(255,Math.max(0,(n&0xff)+a))})`;}
 
 function mkLeaf(idx,total,angle,hR){
-  const t=(idx+.5)/total, σp=.5+.7*Math.sin(t*Math.PI), perp=angle+Math.PI/2, pOff=gauss(σp);
-  return{ x:Math.cos(angle)*t*hR+gauss(1.8)*Math.cos(angle)+pOff*Math.cos(perp),
-          y:Math.sin(angle)*t*hR+gauss(1.8)*Math.sin(angle)+pOff*Math.sin(perp),
-          vx:0,vy:0,ang:Math.random()*Math.PI,angV:0,
-          ti:Math.floor(Math.random()*ATLAS.length), sc:.42+Math.random()*.30,
-          t, pOff:gauss(.35) };
+  const t=(idx+.5)/total, pOff=gauss(.35);
+  const pos=leafPos(angle,t,hR,pOff);
+  return{ θ:angle, θv:0,
+          t, pOff,
+          x:pos.x, y:pos.y,
+          ang:Math.random()*Math.PI, angV:0,
+          ti:Math.floor(Math.random()*ATLAS.length), sc:.42+Math.random()*.30 };
 }
 
 const PAL={
@@ -76,14 +77,15 @@ const PAL={
   m:{skin:'#f4c186',shirt:'#186038',pants:'#243520',hair:'#3a2010',broom:'#7a5828'},
 };
 
-const BF_FRAC=0.22, BRUSH_R=6;
+const BF_FRAC=0.22, BRUSH_R=8;
 
 function mkMan(pal,speed,innerR,outerR,startFrac,phaseOff){
   return{ pal,speed,innerR,outerR,
           rPos:innerR+(outerR-innerR)*startFrac,
           rDir:startFrac<.5?1:-1,
           θ:0,facing:0,x:0,y:0,
-          sweepPhase:phaseOff, sweepSpd:.46, sweepRange:10, brushR:BRUSH_R };
+          sweepPhase:phaseOff, sweepSpd:.46, sweepRange:10, brushR:BRUSH_R,
+          brSweepFwd:0 };
 }
 
 const HOUR_N=5500,MIN_N=5500;
@@ -105,7 +107,7 @@ function getAngles(){
   return{hA:((h*3600+m*60+s+ms/1000)/43200)*2*Math.PI-Math.PI/2,
          mA:((m*60+s+ms/1000)/3600)*2*Math.PI-Math.PI/2};
 }
-function leafTarget(lf,a,hR){const p=a+Math.PI/2;return{x:Math.cos(a)*lf.t*hR+Math.cos(p)*lf.pOff,y:Math.sin(a)*lf.t*hR+Math.sin(p)*lf.pOff};}
+function leafPos(a,t,hR,pOff){const p=a+Math.PI/2;return{x:Math.cos(a)*t*hR+Math.cos(p)*pOff,y:Math.sin(a)*t*hR+Math.sin(p)*pOff};}
 
 function init(){
   const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
@@ -115,19 +117,25 @@ function init(){
   mMen=[ mkMan(PAL.m,18,mR*.04,mR*.52,0.0,0), mkMan(PAL.m,18,mR*.48,mR*.96,1.0,Math.PI) ];
 }
 
-const K_S=3.0,VDRAG=4.0,ADRAG=5.0,WALL=R*.882;
+const K_ANG=8.0,D_ANG=2*Math.sqrt(K_ANG),MAX_LAG=0.15,ADRAG=5.0,WALL=R*.882;
+const BRUSH_STR=0.08;
 function stepLeaves(leaves,a,hR,dt){
-  const vdf=Math.exp(-VDRAG*dt),adf=Math.exp(-ADRAG*dt);
+  const adf=Math.exp(-ADRAG*dt);
   for(let i=0;i<leaves.length;i++){
     const lf=leaves[i];
-    if(Math.hypot(lf.vx,lf.vy)<0.22&&Math.abs(lf.angV)<0.12){lf.vx=0;lf.vy=0;lf.angV=0;continue;}
-    const tg=leafTarget(lf,a,hR); const ddx=tg.x-lf.x,ddy=tg.y-lf.y;
-    lf.vx+=ddx*K_S*dt; lf.vy+=ddy*K_S*dt;
-    lf.vx*=vdf; lf.vy*=vdf; lf.angV*=adf;
-    lf.x+=lf.vx*dt; lf.y+=lf.vy*dt; lf.ang+=lf.angV*dt;
-    if(Math.hypot(lf.vx,lf.vy)<0.3&&Math.hypot(ddx,ddy)<1.4){lf.x=tg.x;lf.y=tg.y;lf.vx=0;lf.vy=0;lf.angV=0;}
+    let dθ=a-lf.θ;
+    if(dθ>Math.PI)dθ-=2*Math.PI;
+    if(dθ<-Math.PI)dθ+=2*Math.PI;
+    if(dθ<0){lf.θ=a;lf.θv=0;dθ=0;}
+    if(dθ>MAX_LAG){lf.θ=a-MAX_LAG;dθ=MAX_LAG;}
+    lf.θv+=(K_ANG*dθ-D_ANG*lf.θv)*dt;
+    if(lf.θv<0)lf.θv=0;
+    lf.θ+=lf.θv*dt;
+    if(lf.θ>a){lf.θ=a;lf.θv=0;}
+    if(dθ>0.0005||lf.θv>0.0005){const pos=leafPos(lf.θ,lf.t,hR,lf.pOff);lf.x=pos.x;lf.y=pos.y;}
+    lf.angV*=adf; lf.ang+=lf.angV*dt;
     const r=Math.hypot(lf.x,lf.y);
-    if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;const dot=lf.vx*nx+lf.vy*ny;if(dot>0){lf.vx-=1.6*dot*nx;lf.vy-=1.6*dot*ny;}lf.angV+=(Math.random()-.5)*9;}
+    if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;lf.angV+=(Math.random()-.5)*9;}
   }
 }
 
@@ -138,21 +146,22 @@ function stepMan(man,grid,leaves,handAngle,hR,dt){
   man.θ=handAngle-BF_FRAC;
   man.x=Math.cos(man.θ)*man.rPos; man.y=Math.sin(man.θ)*man.rPos;
   man.facing=man.θ+Math.PI/2;
-  const bFwd=BF_FRAC*man.rPos;
   man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
   const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
-  const fwdX=-Math.sin(man.θ),fwdY=Math.cos(man.θ),radX=Math.cos(man.θ),radY=Math.sin(man.θ);
-  const brX=man.x+fwdX*bFwd+radX*sweepT*man.sweepRange;
-  const brY=man.y+fwdY*bFwd+radY*sweepT*man.sweepRange;
+  const fwdX=-Math.sin(man.θ),fwdY=Math.cos(man.θ);
+  const bFwd=BF_FRAC*man.rPos, sweepFwd=sweepT*man.sweepRange;
+  man.brSweepFwd=sweepFwd;
+  const brX=man.x+fwdX*(bFwd+sweepFwd);
+  const brY=man.y+fwdY*(bFwd+sweepFwd);
+  const sweepVel=Math.cos(man.sweepPhase), isPower=sweepVel>0;
   const cands=near(grid,cx+brX,cy+brY,man.brushR);
   for(let i=0;i<cands.length;i++){
     const lf=cands[i];const dx=lf.x-brX,dy=lf.y-brY,d=Math.hypot(dx,dy);
     if(d>=man.brushR)continue;
-    const str=60*(1-d/man.brushR);
-    const tg=leafTarget(lf,handAngle,hR);const tdx=tg.x-lf.x,tdy=tg.y-lf.y,td=Math.hypot(tdx,tdy)||1;
-    lf.vx+=(tdx/td)*str*.80+radX*(Math.random()-.5)*str*.20;
-    lf.vy+=(tdy/td)*str*.80+radY*(Math.random()-.5)*str*.20;
-    lf.angV+=(Math.random()-.5)*22;
+    const proximity=1-d/man.brushR;
+    const str=BRUSH_STR*proximity*(isPower?60:15);
+    lf.θv+=str*dt;
+    lf.angV+=(Math.random()-.5)*(isPower?18:6);
   }
 }
 
@@ -433,7 +442,7 @@ function drawMan(man){
   ctx.save(); ctx.translate(s*.8,s*.9);
   ctx.beginPath(); ctx.ellipse(0,0,s*8.5,s*6.5,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fill(); ctx.restore();
-  const bFwd=BF_FRAC*man.rPos, bhX=bFwd, bhY=sweepT*man.sweepRange;
+  const bFwd=BF_FRAC*man.rPos, bhX=bFwd+(man.brSweepFwd||0), bhY=Math.sin(man.sweepPhase*.7)*2.5*s;
   const hAng=Math.atan2(bhY,bhX-s*4.5), hPerp=hAng+Math.PI/2, hw=s*8;
   ctx.strokeStyle=pal.broom; ctx.lineWidth=s*1.8; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(s*4.5,0); ctx.lineTo(bhX,bhY); ctx.stroke();
