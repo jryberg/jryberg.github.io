@@ -22,6 +22,8 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 .dir-name { color: #5f87d7; font-weight: bold; }
 #cursor { display: inline-block; width: 8px; height: 1.2em; background: #d4d4d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; }
 @keyframes blink { 50% { opacity: 0; } }
+#sl-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:#0a0a0a; z-index:2000; overflow:hidden; }
+#sl-pre { position:absolute; top:0; left:0; margin:0; padding:8px; color:#d4d4d4; font-family:'Cascadia Code','Fira Code','JetBrains Mono','Consolas','Monaco',monospace; font-size:14px; line-height:1.4; white-space:pre; }
 /* X11 Window Manager - Motif/CDE style */
 .x11-window { position: fixed; background: #b4b4b4; border: 2px outset #d8d8d8; box-shadow: 2px 2px 8px rgba(0,0,0,0.5); z-index: 1000; min-width: 320px; min-height: 240px; display: flex; flex-direction: column; }
 .x11-titlebar { display: flex; align-items: center; height: 24px; background: linear-gradient(to bottom, #c8c8c8, #a0a0a0); border-bottom: 2px groove #888; padding: 0 3px; cursor: default; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
@@ -292,6 +294,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   function killProcess(pid) {
     var proc = processes[pid];
     if (!proc) return false;
+    if (proc.intervalId) clearInterval(proc.intervalId);
     if (proc.windowEl && proc.windowEl.parentNode) proc.windowEl.parentNode.removeChild(proc.windowEl);
     if (foregroundPid === pid) {
       foregroundPid = null;
@@ -352,6 +355,269 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     var m = d.getMinutes().toString().padStart(2, '0');
     var s = d.getSeconds().toString().padStart(2, '0');
     return day + ' ' + month + ' ' + date + ' ' + h + ':' + m + ':' + s + ' ' + d.getFullYear();
+  }
+
+  // ── sl (Steam Locomotive) ────────────────────────────────────────────────
+  function runSL(args) {
+    var escapeOk = args.indexOf('-e') !== -1;
+    var accident = args.indexOf('-a') !== -1;
+    var logo     = args.indexOf('-l') !== -1;
+    var c51mode  = args.indexOf('-c') !== -1;
+    var fly      = args.indexOf('-F') !== -1;
+
+    var probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-family:"Cascadia Code","Fira Code","JetBrains Mono",Consolas,Monaco,monospace;font-size:14px;line-height:1.4';
+    probe.textContent = 'MMMMMMMMMM';
+    document.body.appendChild(probe);
+    var cw = probe.offsetWidth / 10 || 8.4;
+    var ch = probe.offsetHeight || 20;
+    document.body.removeChild(probe);
+    var COLS  = Math.max(80,  Math.floor(terminal.clientWidth  / cw));
+    var LINES = Math.max(24,  Math.floor(terminal.clientHeight / ch));
+
+    var overlay = document.createElement('div');
+    overlay.id = 'sl-overlay';
+    var pre = document.createElement('pre');
+    pre.id = 'sl-pre';
+    overlay.appendChild(pre);
+    document.body.appendChild(overlay);
+
+    var pid = nextPid++;
+    var proc = { pid: pid, command: 'sl' + (args.length ? ' ' + args.join(' ') : ''),
+      startTime: new Date(), status: 'running', windowEl: overlay, intervalId: null, jobId: null };
+    processes[pid] = proc;
+    foregroundPid = pid;
+    disableTerminalInput();
+
+    var D51_BODY = [
+      "      ====        ________                ___________ ",
+      "  _D _|  |_______/        \\__I_I_____===__|_________| ",
+      "   |(_)---  |   H\\________/ |   |        =|___ ___|   ",
+      "   /     |  |   H  |  |     |   |         ||_| |_||   ",
+      "  |      |  |   H  |__--------------------| [___] |   ",
+      "  | ________|___H__/__|_____/[][]~\\_______|       |   ",
+      "  |/ |   |-----------I_____I [][] []  D   |=======|__ "
+    ];
+    var D51_WHL = [
+      ["__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__ ",
+       " |/-=|___|=    ||    ||    ||    |_____/~\\___/        ",
+       "  \\_/      \\O=====O=====O=====O_/      \\_/            "],
+      ["__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__ ",
+       " |/-=|___|=O=====O=====O=====O   |_____/~\\___/        ",
+       "  \\_/      \\__/  \\__/  \\__/  \\__/      \\_/            "],
+      ["__/ =| o |=-O=====O=====O=====O \\ ____Y___________|__ ",
+       " |/-=|___|=    ||    ||    ||    |_____/~\\___/        ",
+       "  \\_/      \\__/  \\__/  \\__/  \\__/      \\_/            "],
+      ["__/ =| o |=-~O=====O=====O=====O\\ ____Y___________|__ ",
+       " |/-=|___|=    ||    ||    ||    |_____/~\\___/        ",
+       "  \\_/      \\__/  \\__/  \\__/  \\__/      \\_/            "],
+      ["__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__ ",
+       " |/-=|___|=   O=====O=====O=====O|_____/~\\___/        ",
+       "  \\_/      \\__/  \\__/  \\__/  \\__/      \\_/            "],
+      ["__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__ ",
+       " |/-=|___|=    ||    ||    ||    |_____/~\\___/        ",
+       "  \\_/      \\_O=====O=====O=====O/      \\_/            "]
+    ];
+    var D51_COAL = [
+      "                              ","                              ",
+      "    _________________         ","   _|                \\_____A  ",
+      " =|                        |  "," -|                        |  ",
+      "__|________________________|_ ","|__________________________|_ ",
+      "   |_D__D__D_|  |_D__D__D_|   ","    \\_/   \\_/    \\_/   \\_/    ",
+      "                              "
+    ];
+    var C51_BODY = [
+      "        ___                                            ",
+      "       _|_|_  _     __       __             ___________",
+      "    D__/   \\_(_)___|  |__H__|  |_____I_Ii_()|_________|",
+      "     | `---'   |:: `--'  H  `--'         |  |___ ___|  ",
+      "    +|~~~~~~~~++::~~~~~~~H~~+=====+~~~~~~|~~||_| |_||  ",
+      "    ||        | ::       H  +=====+      |  |::  ...|  ",
+      "|    | _______|_::-----------------[][]-----|       |  "
+    ];
+    var C51_WHL = [
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|=[]=-      ||      ||      |  ||=======_|__",
+       "/~\\____|___|/~\\_|  O=======O=======O   |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "],
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|=[]=- O=======O=======O    |  ||=======_|__",
+       "/~\\____|___|/~\\_|      ||      ||      |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "],
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|==[]=- O=======O=======O   |  ||=======_|__",
+       "/~\\____|___|/~\\_|      ||      ||      |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "],
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|===[]=- O=======O=======O  |  ||=======_|__",
+       "/~\\____|___|/~\\_|      ||      ||      |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "],
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|===[]=-    ||      ||      |  ||=======_|__",
+       "/~\\____|___|/~\\_|    O=======O=======O |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "],
+      ["| /~~ ||   |-----/~~~~\\  /[I_____I][][] --|||_______|__",
+       "------'|oOo|==[]=-     ||      ||      |  ||=======_|__",
+       "/~\\____|___|/~\\_|   O=======O=======O  |__|+-/~\\_|     ",
+       "\\_/         \\_/  \\____/  \\____/  \\____/      \\_/       "]
+    ];
+    var C51_COAL = [
+      "                              ","                              ","                              ",
+      "    _________________         ","   _|                \\_____A  ",
+      " =|                        |  "," -|                        |  ",
+      "__|________________________|_ ","|__________________________|_ ",
+      "   |_D__D__D_|  |_D__D__D_|   ","    \\_/   \\_/    \\_/   \\_/    ",
+      "                              "
+    ];
+    var LOGO_BODY = [
+      "     ++      +------ ","     ||      |+-+ |  ",
+      "   /---------|| | |  ","  + ========  +-+ |  "
+    ];
+    var LOGO_WHL = [
+      [" _|--O========O~\\-+  ", "//// \\_/      \\_/    "],
+      [" _|--/O========O\\-+  ", "//// \\_/      \\_/    "],
+      [" _|--/~O========O-+  ", "//// \\_/      \\_/    "],
+      [" _|--/~\\------/~\\-+  ", "//// \\_O========O    "],
+      [" _|--/~\\------/~\\-+  ", "//// \\O========O/    "],
+      [" _|--/~\\------/~\\-+  ", "//// O========O_/    "]
+    ];
+    var LOGO_COAL = [
+      "____                 ","|   \\@@@@@@@@@@@     ",
+      "|    \\@@@@@@@@@@@@@_ ","|                  | ",
+      "|__________________| ","   (O)       (O)     ",
+      "                     "
+    ];
+    var LOGO_CAR = [
+      "____________________ ","|  ___ ___ ___ ___ | ",
+      "|  |_| |_| |_| |_| | ","|__________________| ",
+      "|__________________| ","   (O)        (O)    ",
+      "                     "
+    ];
+    var SMOKEPTNS = 16;
+    var SmokeChars = [
+      ["(   )","(    )","(    )","(   )","(  )","(  )","( )","( )","()","()","O","O","O","O","O"," "],
+      ["(@@@)","(@@@@)","(@@@@)","(@@@)","(@@)","(@@)","(@)","(@)","@@","@@","@","@","@","@","@"," "]
+    ];
+    var smoke_dy = [2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0];
+    var smoke_dx = [-2,-1,0,1,1,1,1,1,2,2,2,2,2,3,3,3];
+    var smokeP = [];
+
+    function makeGrid() {
+      var g = [], r, c, row;
+      for (r = 0; r < LINES; r++) {
+        row = [];
+        for (c = 0; c < COLS; c++) row.push(' ');
+        g.push(row);
+      }
+      return g;
+    }
+    function pStr(g, row, col, str) {
+      if (row < 0 || row >= LINES) return;
+      for (var i = 0; i < str.length; i++) {
+        var c = col + i;
+        if (c >= 0 && c < COLS) g[row][c] = str[i];
+      }
+    }
+    function pMan(g, row, col) {
+      var f = (Math.floor((84 + col) / 12) % 2 + 2) % 2;
+      pStr(g, row,     col, f === 0 ? "" : "Help!");
+      pStr(g, row + 1, col, f === 0 ? "(O)" : "\\O/");
+    }
+
+    var x = COLS - 1;
+    var escapeHandler = null;
+
+    function cleanup() {
+      clearInterval(proc.intervalId);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (escapeHandler) document.removeEventListener('keydown', escapeHandler);
+      foregroundPid = null;
+      proc.status = 'done';
+      delete processes[pid];
+      enableTerminalInput();
+      updatePrompt();
+      scrollToBottom();
+    }
+
+    function tick() {
+      var tLen = logo ? 84 : c51mode ? 87 : 83;
+      if (x < -tLen) { cleanup(); return; }
+
+      var g = makeGrid();
+      var i, y, fi, dfly = 0, sy, sx;
+
+      if (logo) {
+        fi = (((Math.floor((84 + x) / 3)) % 6) + 6) % 6;
+        y  = fly ? (Math.floor(x/6) + LINES - Math.floor(COLS/6) - 6) : (Math.floor(LINES/2) - 3);
+        var py1 = fly?2:0, py2 = fly?4:0, py3 = fly?6:0;
+        var lRows = LOGO_BODY.concat(LOGO_WHL[fi]).concat(["                     "]);
+        for (i = 0; i <= 6; i++) {
+          pStr(g, y+i,      x,    lRows[i]);
+          pStr(g, y+i+py1,  x+21, LOGO_COAL[i]);
+          pStr(g, y+i+py2,  x+42, LOGO_CAR[i]);
+          pStr(g, y+i+py3,  x+63, LOGO_CAR[i]);
+        }
+        if (accident) {
+          pMan(g, y+1,      x+14);
+          pMan(g, y+1+py2,  x+45); pMan(g, y+1+py2, x+53);
+          pMan(g, y+1+py3,  x+66); pMan(g, y+1+py3, x+74);
+        }
+        sy = y-1; sx = x+4;
+      } else if (c51mode) {
+        fi   = ((87 + x) % 6 + 6) % 6;
+        y    = fly ? (Math.floor(x/7) + LINES - Math.floor(COLS/7) - 11) : (Math.floor(LINES/2) - 5);
+        dfly = fly ? 1 : 0;
+        var cRows = C51_BODY.concat(C51_WHL[fi]).concat(["                                                       "]);
+        for (i = 0; i <= 11; i++) {
+          pStr(g, y+i,       x,    cRows[i]);
+          pStr(g, y+i+dfly,  x+55, C51_COAL[i]);
+        }
+        if (accident) { pMan(g, y+3, x+45); pMan(g, y+3, x+49); }
+        sy = y-1; sx = x+7;
+      } else {
+        fi   = ((83 + x) % 6 + 6) % 6;
+        y    = fly ? (Math.floor(x/7) + LINES - Math.floor(COLS/7) - 10) : (Math.floor(LINES/2) - 5);
+        dfly = fly ? 1 : 0;
+        var dRows = D51_BODY.concat(D51_WHL[fi]).concat(["                                                      "]);
+        for (i = 0; i <= 10; i++) {
+          pStr(g, y+i,       x,    dRows[i]);
+          pStr(g, y+i+dfly,  x+53, D51_COAL[i]);
+        }
+        if (accident) { pMan(g, y+2, x+43); pMan(g, y+2, x+47); }
+        sy = y-1; sx = x+7;
+      }
+
+      // smoke: advance state every 4 steps, paint every frame
+      if (x % 4 === 0) {
+        for (var j = 0; j < smokeP.length; j++) {
+          var p = smokeP[j];
+          p.y -= smoke_dy[p.ptrn];
+          p.x += smoke_dx[p.ptrn];
+          if (p.ptrn < SMOKEPTNS - 1) p.ptrn++;
+        }
+        smokeP.push({y: sy, x: sx, ptrn: 0, kind: smokeP.length % 2});
+      }
+      for (var k = 0; k < smokeP.length; k++) {
+        pStr(g, smokeP[k].y, smokeP[k].x, SmokeChars[smokeP[k].kind][smokeP[k].ptrn]);
+      }
+
+      pre.textContent = g.map(function(row) { return row.join(''); }).join('\n');
+      x--;
+    }
+
+    proc.intervalId = setInterval(tick, 40);
+
+    if (escapeOk) {
+      escapeHandler = function(e) {
+        if (e.key === 'c' && e.ctrlKey) {
+          e.preventDefault();
+          cleanup();
+          addLine('^C');
+          scrollToBottom();
+        }
+      };
+      document.addEventListener('keydown', escapeHandler);
+    }
   }
 
   var commands = {
@@ -448,7 +714,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       for (var i = 0; i < lines.length; i++) lines[i].remove();
     },
     help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, clock, floppy, help, exit');
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, clock, floppy, help, exit');
     },
     echo: function(args) { addLine(args.join(' ')); },
     date: function() { addLine(formatDate(new Date())); },
@@ -496,7 +762,8 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       }
     },
     sudo: function() { addLine('[sudo] password for guest: '); addLine('guest is not in the sudoers file. This incident will be reported.'); },
-    su: function() { addLine('Password: '); addLine('su: Authentication failure'); }
+    su: function() { addLine('Password: '); addLine('su: Authentication failure'); },
+    sl: function(args) { runSL(args); }
   };
 
   var denied = ['rm', 'mv', 'cp', 'mkdir', 'touch', 'chmod', 'chown', 'chgrp', 'dd', 'mkfs', 'mount', 'umount'];
