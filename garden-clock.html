@@ -15,15 +15,11 @@
   h1 { color:#c8a96e; font-size:1.5rem; font-style:italic;
        letter-spacing:.12em; text-shadow:0 2px 10px rgba(0,0,0,.8); }
   canvas { display:block; filter:drop-shadow(0 22px 65px rgba(0,0,0,.9)); }
-  .leg { display:flex; gap:2.5rem; font-style:italic; font-size:.82rem; color:#7a9a6a; }
-  .h::before { content:'● '; color:#c05828; }
-  .m::before { content:'● '; color:#2a8a40; }
 </style>
 </head>
 <body>
 <h1>The Garden Clock</h1>
 <canvas id="c"></canvas>
-<div class="leg"><span class="h">Hours</span><span class="m">Minutes</span></div>
 
 <script>
 const canvas=document.getElementById('c');
@@ -77,17 +73,20 @@ const PAL={
   m:{skin:'#f4c186',shirt:'#186038',pants:'#243520',hair:'#3a2010',broom:'#7a5828'},
 };
 
-const BRUSH_R=4;
+const BRUSH_R=6;
 
+let _manId=0;
 function mkMan(pal,speed,innerR,outerR,startFrac,phaseOff){
-  return{ pal,speed,innerR,outerR,
-          rPos:innerR+(outerR-innerR)*startFrac,
+  const r0=innerR+(outerR-innerR)*startFrac;
+  return{ id:_manId++, pal,speed,innerR,outerR,
+          rPos:r0,
           rDir:startFrac<.5?1:-1,
           θ:0,facing:0,x:0,y:0,
-          sweepPhase:phaseOff, sweepSpd:.35, brushR:BRUSH_R,
-          brSweepT:-1, walkPhase:0, sweeping:false,
-          state:'walking', stepTimer:0, stepStartR:0, stepStartWP:0,
-          broomTimer:0, curSweepRange:0 };
+          sweepPhase:phaseOff, sweepSpd:.55+Math.random()*.2, brushR:BRUSH_R,
+          brSweepT:-1, walkPhase:Math.random()*Math.PI*2, sweeping:false,
+          state:'walking', stepTimer:Math.random()*.3, stepStartR:r0, stepStartWP:0,
+          broomTimer:0, curSweepRange:0, broomCooldown:0, flipCooldown:Math.random()*2,
+          bf:0.08 };   // adaptive angular offset from hand
 }
 
 const HOUR_N=5500,MIN_N=5500;
@@ -115,15 +114,16 @@ function init(){
   const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
   hL=Array.from({length:HOUR_N},(_,i)=>mkLeaf(i,HOUR_N,hA,hR));
   mL=Array.from({length:MIN_N}, (_,i)=>mkLeaf(i,MIN_N, mA,mR));
-  hMen=[ mkMan(PAL.h,6,hR*.06,hR*.94,0.0,0) ];
-  mMen=[ mkMan(PAL.m,10,mR*.06,mR*.44,0.0,0), mkMan(PAL.m,10,mR*.56,mR*.94,1.0,Math.PI) ];
+  // Workers cover the FULL hand: from just outside the hub (rPos=15) to the very tip.
+  // This ensures leaves at both edges (center and outer tip) are reachable.
+  hMen=[ mkMan(PAL.h,6,15,hR,0.0,0) ];
+  mMen=[ mkMan(PAL.m,10,15,mR,0.0,0), mkMan(PAL.m,10,15,mR,1.0,Math.PI) ];
 }
 
-const D_ANG=3.0,MAX_LAG=0.4,ADRAG=5.0,WALL=R*.882;
+const D_ANG=3.0,MAX_LAG=0.08,ADRAG=5.0,WALL=R*.882;
 const BRUSH_STR=2.0;
 function stepLeaves(leaves,a,hR,dt){
   const adf=Math.exp(-ADRAG*dt),vdf=Math.exp(-D_ANG*dt);
-  let maxLag=0;
   for(let i=0;i<leaves.length;i++){
     const lf=leaves[i];
     const oldθ=lf.θ;
@@ -133,7 +133,6 @@ function stepLeaves(leaves,a,hR,dt){
     if(dθ>MAX_LAG){lf.θ=a-MAX_LAG;dθ=MAX_LAG;}
     if(dθ<0){lf.θv=0;}
     else{
-      if(dθ>maxLag)maxLag=dθ;
       lf.θv*=vdf;
       if(lf.θv<0)lf.θv=0;
       lf.θ+=lf.θv*dt;
@@ -143,15 +142,46 @@ function stepLeaves(leaves,a,hR,dt){
     const r=Math.hypot(lf.x,lf.y);
     if(r>WALL){const nx=lf.x/r,ny=lf.y/r;lf.x=nx*WALL;lf.y=ny*WALL;lf.angV+=(Math.random()-.5)*9;}
   }
-  return maxLag;
 }
 
-const MIN_SWEEP_LAG=0.008, STEP_SIZE=7, STEP_ACTIVE=0.22, STEP_CYCLE=0.55;
-const BF_PIX=18, SWEEP_PIX_MAX=10;
-function stepMan(man,grid,leaves,handAngle,hR,dt,lag,otherMen){
-  // Worker angular position (fixed pixel offset behind hand — consistent at all radii)
-  man.θ=handAngle-BF_PIX/man.rPos;
-  // Facing: walking → radial (walking direction), brooming → tangential (facing leaves)
+const MIN_SWEEP_LAG=0.004, STEP_SIZE=9, STEP_ACTIVE=0.22, STEP_CYCLE=0.55;
+// Angular broom geometry — consistent reach across all radii
+// Broom geometry is now adaptive per-worker via man.bf (angular offset from hand).
+function stepMan(man,grid,leaves,handAngle,hR,dt,otherMen){
+  // Scan EVERY leaf — no sampling. Workers naturally split the hand: each targets
+  // worst-lag leaves closer to them than to any other worker (dynamic halves).
+  // lagHere still uses full brush reach (broom whatever is at my feet).
+  let lagHere=0, worstLag=0, worstLagR=man.rPos;
+  const hereWin=man.brushR;
+  for(let i=0;i<leaves.length;i++){
+    const lf=leaves[i]; const leafR=lf.t*hR;
+    if(leafR<man.innerR-5||leafR>man.outerR+5)continue;
+    const leafLag=handAngle-lf.θ;
+    // Is this leaf "mine"? (closer to me than to any other worker)
+    let mine=true;
+    if(otherMen){
+      for(let j=0;j<otherMen.length;j++){
+        const o=otherMen[j]; if(o===man)continue;
+        if(Math.abs(o.rPos-leafR)<Math.abs(man.rPos-leafR)){mine=false;break;}
+      }
+    }
+    if(mine&&leafLag>worstLag){worstLag=leafLag;worstLagR=leafR;}
+    // Any leaf within brush reach is fair game for brooming
+    if(Math.abs(leafR-man.rPos)<=hereWin&&leafLag>lagHere)lagHere=leafLag;
+  }
+
+  // Adaptive angular offset: worker walks just behind the lagging leaves.
+  // Only update while walking — stays stable during brooming so worker doesn't slide.
+  // Cap in pixel-distance (18px) prevents the arm from stretching past what's reachable.
+  if(man.state==='walking'){
+    const needed=Math.max(lagHere,worstLag)+0.025;
+    const angCap=18/man.rPos;  // pixel cap → angular at this rPos
+    const targetBF=Math.max(0.04,Math.min(angCap,needed));
+    man.bf+=(targetBF-man.bf)*Math.min(1,1.5*dt);
+  }
+  // Worker angular position (adaptive offset → broom stays short relative to lag)
+  man.θ=handAngle-man.bf;
+  // Facing: walking → radial; brooming → tangential toward leaves
   let tgtF;
   if(man.state==='walking')tgtF=man.rDir>0?man.θ:man.θ+Math.PI;
   else tgtF=man.θ+Math.PI/2;
@@ -159,48 +189,82 @@ function stepMan(man,grid,leaves,handAngle,hR,dt,lag,otherMen){
   while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI;
   man.facing+=da*Math.min(1,2.5*dt);
 
+  if(man.flipCooldown>0)man.flipCooldown-=dt;
+
   if(man.state==='walking'){
     man.sweeping=false; man.brSweepT=-1;
     man.stepTimer+=dt;
     if(man.stepTimer>=STEP_CYCLE){
       man.stepTimer=0;
-      // Clamp to bounds before storing start position
-      if(man.rPos>=man.outerR){man.rPos=man.outerR;man.rDir=-1;}
-      if(man.rPos<=man.innerR){man.rPos=man.innerR;man.rDir=+1;}
-      // Collision avoidance: if another worker is too close, flip direction
+      if(man.broomCooldown>0)man.broomCooldown--;
+      // Bounds — natural wall-bounce keeps workers covering the full length
+      if(man.rPos>=man.outerR){man.rPos=man.outerR;man.rDir=-1;man.flipCooldown=1.5;}
+      if(man.rPos<=man.innerR){man.rPos=man.innerR;man.rDir=+1;man.flipCooldown=1.5;}
+      // Worker-worker collision (rPos-based, at step boundary). ASYMMETRIC: only the
+      // higher-id worker yields (flips direction) — the lower-id worker keeps its direction
+      // so one of them actually reaches a pile sitting between them. Active-step clamp below
+      // still prevents physical overlap while the yielder walks away.
       if(otherMen){
         for(let i=0;i<otherMen.length;i++){
           const o=otherMen[i]; if(o===man)continue;
-          if(Math.abs(o.rPos-man.rPos)<18){
-            man.rDir=o.rPos>man.rPos?-1:1;
+          if(Math.abs(o.rPos-man.rPos)<20){
+            if(man.id>o.id){
+              man.rDir=o.rPos>man.rPos?-1:1;
+              man.flipCooldown=1.5;
+            }
             break;
           }
         }
       }
-      man.stepStartR=man.rPos; man.stepStartWP=man.walkPhase;
-      if(lag>MIN_SWEEP_LAG){
-        man.state='brooming'; man.broomTimer=0; man.sweepPhase=-Math.PI/2;
-        man.curSweepRange=Math.min(lag*man.rPos,SWEEP_PIX_MAX);
+      // Navigation: actively head toward the worst-lagging leaves in my claimed half.
+      // flipCooldown prevents rapid ping-pong between alternating worst spots.
+      if(man.flipCooldown<=0&&worstLag>MIN_SWEEP_LAG*2){
+        const dist=worstLagR-man.rPos;
+        if(Math.abs(dist)>STEP_SIZE*1.5){
+          const desiredDir=dist>0?1:-1;
+          if(desiredDir!==man.rDir){
+            man.rDir=desiredDir;
+            man.flipCooldown=1.5;  // commit to new direction for 1.5s
+          }
+        }
       }
+      // Broom only when leaves AT CURRENT POSITION are lagging AND cooldown expired
+      if(lagHere>MIN_SWEEP_LAG&&man.broomCooldown<=0){
+        man.state='brooming'; man.broomTimer=0; man.sweepPhase=-Math.PI/2;
+        // Sweep range matches the worker's angular offset — broom reaches exactly from
+        // worker position to hand. No wasted reach, no rubber-arm extension.
+        man.curSweepRange=man.bf;
+      }
+      man.stepStartR=man.rPos; man.stepStartWP=man.walkPhase;
     }else if(man.stepTimer<STEP_ACTIVE){
       const t=man.stepTimer/STEP_ACTIVE, eased=t*t*(3-2*t);
-      man.rPos=man.stepStartR+STEP_SIZE*man.rDir*eased;
+      let newR=man.stepStartR+STEP_SIZE*man.rDir*eased;
+      // Clamp: don't step into another worker's personal space (18px), but never force
+      // the worker backward past their step start if they're already inside the safety zone.
+      if(otherMen){
+        for(let i=0;i<otherMen.length;i++){
+          const o=otherMen[i]; if(o===man)continue;
+          if(man.rDir>0&&o.rPos>man.stepStartR){
+            newR=Math.max(man.stepStartR,Math.min(newR,o.rPos-18));
+          }else if(man.rDir<0&&o.rPos<man.stepStartR){
+            newR=Math.min(man.stepStartR,Math.max(newR,o.rPos+18));
+          }
+        }
+      }
+      man.rPos=newR;
       man.walkPhase=man.stepStartWP+Math.PI*eased;
     }
   }else{ // 'brooming'
     man.sweeping=true;
     man.broomTimer+=dt;
     man.sweepPhase+=dt*man.sweepSpd*Math.PI*2;
-    // Adaptive sweep range IN PIXELS, capped by actual lag
-    const targetRange=Math.min(lag*man.rPos,SWEEP_PIX_MAX);
-    man.curSweepRange+=(targetRange-man.curSweepRange)*Math.min(1,4*dt);
+    // Keep sweep range matched to worker's current angular offset (bf is stable during broom)
+    man.curSweepRange=man.bf;
     const raw=Math.sin(man.sweepPhase),u=(raw+1)/2,e=u*u*(3-2*u),sweepT=e*2-1;
     man.brSweepT=sweepT;
-    // Broom local tangential position: sweepT=-1 → behind leaf pile, sweepT=+1 → at hand
-    // broomLocal pixels from worker, in tangential direction
-    const broomLocal=BF_PIX-(1-sweepT)*.5*man.curSweepRange;
-    const fwdX=-Math.sin(man.θ), fwdY=Math.cos(man.θ);
-    const brX=man.x+fwdX*broomLocal, brY=man.y+fwdY*broomLocal;
+    // Broom angular position: sweepT=-1 → at worker (back of lag zone); sweepT=+1 → at hand
+    const broomAng=handAngle-(1-sweepT)*.5*man.curSweepRange;
+    const brX=Math.cos(broomAng)*man.rPos, brY=Math.sin(broomAng)*man.rPos;
     const sweepVel=Math.cos(man.sweepPhase), isPower=sweepVel>0;
     if(isPower){
       const cands=near(grid,cx+brX,cy+brY,man.brushR);
@@ -210,19 +274,22 @@ function stepMan(man,grid,leaves,handAngle,hR,dt,lag,otherMen){
         const leafLag=handAngle-lf.θ;
         if(leafLag<=0)continue;
         const proximity=1-d/man.brushR;
-        // Gentle push; hard cap velocity by remaining lag so leaf cannot overshoot
         lf.θv+=0.3*proximity*dt*60;
         const maxV=leafLag*3;
         if(lf.θv>maxV)lf.θv=maxV;
         lf.angV+=(Math.random()-.5)*8;
       }
     }
-    if(man.broomTimer>0.4&&lag<=MIN_SWEEP_LAG&&sweepT<-0.85){
-      man.state='walking'; man.stepTimer=0; man.stepStartR=man.rPos; man.stepStartWP=man.walkPhase;
+    // Exit when leaves AT CURRENT POSITION are clean, OR timeout (generous so sweep completes)
+    if((man.broomTimer>0.4&&lagHere<=MIN_SWEEP_LAG&&sweepT<-0.85)||man.broomTimer>1.5){
+      man.state='walking';
+      man.stepTimer=0;
+      man.stepStartR=man.rPos; man.stepStartWP=man.walkPhase;
+      man.broomCooldown=1;
     }
   }
 
-  // World position (always on the hand angle)
+  // World position
   man.x=Math.cos(man.θ)*man.rPos; man.y=Math.sin(man.θ)*man.rPos;
 }
 
@@ -514,7 +581,8 @@ function drawMan(man){
   }
   // Broom: exact pixel position matching the physics broom
   const sweepT=man.brSweepT||-1;
-  const bhX=man.sweeping?BF_PIX-(1-sweepT)*.5*man.curSweepRange:BF_PIX-8, bhY=man.sweeping?Math.sin(man.sweepPhase*.7)*1.5*s:0;
+  // Broom visual: matches physics — angular offset × rPos. Adaptive bf keeps it short when lag is small.
+  const bhX=man.sweeping?(man.bf-(1-sweepT)*.5*man.curSweepRange)*man.rPos:Math.min(man.bf*man.rPos,14), bhY=man.sweeping?Math.sin(man.sweepPhase*.7)*1.2*s:0;
   const hAng=Math.atan2(bhY,bhX-s*4.5), hPerp=hAng+Math.PI/2, hw=s*5;
   ctx.strokeStyle=pal.broom; ctx.lineWidth=s*1.4; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(s*4.5,0); ctx.lineTo(bhX,bhY); ctx.stroke();
@@ -582,31 +650,18 @@ init();
 function tick(ts){
   const dt=Math.min((ts-prevTs)/1000,.05); prevTs=ts;
   const{hA,mA}=getAngles(); const hR=R*.50,mR=R*.90;
-  const hLag=stepLeaves(hL,hA,hR,dt), mLag=stepLeaves(mL,mA,mR,dt);
+  stepLeaves(hL,hA,hR,dt); stepLeaves(mL,mA,mR,dt);
   fillGrid(hGrid,hL); fillGrid(mGrid,mL);
-  hMen.forEach(m=>stepMan(m,hGrid,hL,hA,hR,dt,hLag,hMen));
-  mMen.forEach(m=>stepMan(m,mGrid,mL,mA,mR,dt,mLag,mMen));
+  hMen.forEach(m=>stepMan(m,hGrid,hL,hA,hR,dt,hMen));
+  mMen.forEach(m=>stepMan(m,mGrid,mL,mA,mR,dt,mMen));
 
   ctx.clearRect(0,0,SZ,SZ);
   ctx.drawImage(bgCanvas,0,0); // garden + stones + clock face (one blit)
 
-  // Men under leaves
-  hMen.forEach(drawMan); mMen.forEach(drawMan);
-  // Leaves on top
+  // Leaves on the ground — drawn first so workers walk on top of them
   drawLeaves(hL); drawLeaves(mL);
-  // Hats above leaves
-  [...hMen,...mMen].forEach(man=>{
-    const s=man.pal===PAL.h?1.65:1.38, sp=man.sweepPhase;
-    ctx.save(); ctx.translate(cx+man.x,cy+man.y); ctx.rotate(man.facing); ctx.rotate(.18);
-    ctx.translate(0,man.sweeping?Math.sin(sp*2)*s*.25:0);
-    ctx.fillStyle=man.pal.hair; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,.14)'; ctx.beginPath(); ctx.arc(s*1.9,-s*1.4,s*1.6,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=man.pal.skin; ctx.beginPath(); ctx.arc(s*3,0,s*4.6,-Math.PI*.40,Math.PI*.40); ctx.fill();
-    ctx.fillStyle='#1a0c06';
-    ctx.beginPath(); ctx.arc(s*4.3,-s*.9,s*.9,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(s*4.3,s*.9,s*.9,0,Math.PI*2); ctx.fill();
-    ctx.restore();
-  });
+  // Men on top of leaves (their feet tread on leaves)
+  hMen.forEach(drawMan); mMen.forEach(drawMan);
 
   drawHub();
   requestAnimationFrame(tick);
