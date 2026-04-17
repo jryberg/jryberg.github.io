@@ -435,42 +435,75 @@ function drawFloppy(cx, cy, angle) {
   ctx.rotate(angle);
   ctx.translate(-FW / 2, -FH / 2);
 
-  var x = 0, y = 0, w = FW, h = FH, r = 4;
+  var x = 0, y = 0, w = FW, h = FH, r = 3;
 
   // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.roundRect(x + 2, y + 2, w, h, r); ctx.fill();
 
-  // Body
-  ctx.fillStyle = '#222222';
+  // Plastic body (dark, matte)
+  ctx.fillStyle = '#1e1e1e';
   ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
-  ctx.fillStyle = '#383838';
-  ctx.beginPath(); ctx.roundRect(x, y, w, 3, [r, r, 0, 0]); ctx.fill();
-  ctx.strokeStyle = '#444'; ctx.lineWidth = 0.5;
-  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.stroke();
+  // Subtle outer rim highlight
+  ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 0.6;
+  ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, r - 0.5); ctx.stroke();
 
-  // Label
-  var lx = x + 4, ly = y + 4, lw = w - 8, lh = 18;
-  ctx.fillStyle = '#e8e8e0'; ctx.fillRect(lx, ly, lw, lh);
-  ['#b03030','#3060b0','#20882a'].forEach(function(col, i) {
-    ctx.fillStyle = col; ctx.fillRect(lx, ly + lh - 5 + i * 1.5, lw, 2);
+  // Write-protect hole (top-left corner, opposite from shutter)
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x + 3, y + 2, 3, 3);
+  ctx.fillStyle = '#242428';
+  ctx.fillRect(x + 3, y + 4, 3, 1);
+
+  // HD detection hole (top-right corner)
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x + w - 6, y + 2, 3, 3);
+  ctx.fillStyle = '#242428';
+  ctx.fillRect(x + w - 6, y + 4, 3, 1);
+
+  // Paper label — sits above the shutter, covers most of upper portion
+  var lx = x + 3, ly = y + 5, lw = w - 6, lh = h - 20;
+  ctx.fillStyle = '#ececdc'; ctx.fillRect(lx, ly, lw, lh);
+  // Subtle label shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(lx, ly + lh - 1, lw, 1);
+  // Color stripes near top of label
+  ['#20882a','#3060b0','#b03030'].forEach(function(col, i) {
+    ctx.fillStyle = col; ctx.fillRect(lx, ly + 2 + i * 1.5, lw, 1.2);
   });
-  ctx.fillStyle = '#111'; ctx.font = 'bold 5px "Courier New", monospace';
-  ctx.textAlign = 'left'; ctx.fillText('HD  1.44MB', lx + 2, ly + 9);
+  // Brand text
+  ctx.fillStyle = '#111'; ctx.font = 'bold 6px "Courier New", monospace';
+  ctx.textAlign = 'left'; ctx.fillText('1.44MB', lx + 2, ly + lh - 8);
   ctx.font = '4px "Courier New", monospace';
-  ctx.fillText('DOS FORMAT', lx + 2, ly + 15);
+  ctx.fillText('HD  DOS', lx + 2, ly + lh - 2);
 
-  // Metal shutter
-  var sx = x + 8, sy = ly + lh + 2, sw = w - 14, sh = 14;
-  ctx.fillStyle = '#555560'; ctx.fillRect(sx, sy, sw, sh);
-  ctx.fillStyle = '#111118'; ctx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
-  ctx.fillStyle = '#888890'; ctx.fillRect(sx, sy, sw, 2);
+  // Metal shutter — centered on bottom (insertion) edge, ~50% wide, ~28% tall
+  var shW = 22, shH = 13;
+  var shx = x + Math.floor((w - shW) / 2);
+  var shy = y + h - shH - 1;
+  // Base metal
+  ctx.fillStyle = '#8e8e98'; ctx.fillRect(shx, shy, shW, shH);
+  // Bottom edge highlight (light on wrap-around)
+  ctx.fillStyle = '#bcbcc6'; ctx.fillRect(shx, shy + shH - 1, shW, 1);
+  // Left highlight / right shadow
+  ctx.fillStyle = '#a4a4ae'; ctx.fillRect(shx, shy, 1, shH);
+  ctx.fillStyle = '#6e6e78'; ctx.fillRect(shx + shW - 1, shy, 1, shH);
+  // Top shadow where shutter meets plastic
+  ctx.fillStyle = '#50505a'; ctx.fillRect(shx, shy, shW, 1);
+  // Seam between the two shutter halves
+  ctx.fillStyle = '#62626c'; ctx.fillRect(shx + Math.floor(shW / 2), shy + 1, 1, shH - 2);
+  // Rectangular access-window slot (left of seam, dark)
+  ctx.fillStyle = '#141418';
+  ctx.fillRect(shx + 3, shy + shH - 9, 6, 5);
+  // Finger notch on the right half (small depression)
+  ctx.fillStyle = '#5c5c66'; ctx.fillRect(shx + shW - 6, shy + shH - 9, 3, 5);
+  ctx.fillStyle = '#3e3e48'; ctx.fillRect(shx + shW - 5, shy + shH - 8, 2, 3);
 
-  // Write-protect notch
-  ctx.fillStyle = '#111'; ctx.fillRect(x + w - 8, y, 6, 6);
-  ctx.fillStyle = '#0c1c0c'; ctx.fillRect(x + w - 7, y + 1, 4, 4);
-  ctx.fillStyle = '#000'; ctx.beginPath();
-  ctx.arc(x + w - 5, y + 3, 2, 0, Math.PI * 2); ctx.fill();
+  // Small insertion-arrow indicator molded into plastic (left of shutter, pointing down)
+  ctx.fillStyle = '#2e2e2e';
+  ctx.beginPath();
+  ctx.moveTo(x + 4, shy + shH - 8);
+  ctx.lineTo(x + 8, shy + shH - 12);
+  ctx.lineTo(x + 8, shy + shH - 4);
+  ctx.closePath(); ctx.fill();
 
   ctx.restore();
 }
