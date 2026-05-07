@@ -44,9 +44,10 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   var fs = {
     '/': { type: 'dir', children: ['home', 'etc', 'usr', 'var', 'tmp'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
     '/home': { type: 'dir', children: ['guest'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'Documents'], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
+    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'projects.txt', 'Documents'], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
     '/home/guest/contact.txt': { type: 'file', content: 'johan@ryberg.se\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
     '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
+    '/home/guest/projects.txt': { type: 'file', content: 'Projects\n========\n\ngojinja\n-------\nA Go implementation of the Jinja2 template engine.\nFull support for Jinja2 syntax, designed for embedding in Go applications.\n\n  Source:  https://github.com/jryberg/gojinja\n  Docs:    https://securit.se/gojinja/stable/\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
     '/home/guest/Documents': { type: 'dir', children: [], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
     '/etc': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
     '/usr': { type: 'dir', children: ['bin'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
