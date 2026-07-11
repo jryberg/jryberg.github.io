@@ -1,14 +1,19 @@
 3D models in this directory
 ===========================
 
-All models by Quaternius (https://quaternius.com), licensed CC0 1.0
-(public domain, no attribution required — credited anyway because
-they're great): https://creativecommons.org/publicdomain/zero/1.0/
+CC0 1.0 models by Quaternius
+----------------------------
+By Quaternius (https://quaternius.com), licensed CC0 1.0 (public
+domain, no attribution required — credited anyway because they're
+great): https://creativecommons.org/publicdomain/zero/1.0/
 
 Downloaded via poly.pizza:
 
   deer_doe.glb      https://poly.pizza/m/T6Cs7tmMHJ   "Deer" (animated)
   deer_stag.glb     https://poly.pizza/m/tQdzbZ1Cmw   "Stag" (animated)
+  fox.glb           https://poly.pizza/m/Bc97C66HKi   "Fox" (animated)
+  wolf.glb          https://poly.pizza/m/P1gU3Qkr9r   "Wolf" (animated)
+  hare.glb          https://poly.pizza/m/irZjWFARyl   "Bunny"
   pine_cluster.glb  https://poly.pizza/m/oYtDty0fR6   "Pine Trees"
   pine_snow.glb     https://poly.pizza/m/17vQv2X5rh   "Pine Tree with Snow"
   pine_autumn.glb   https://poly.pizza/m/n0X3N2yUFL   "Pine Tree Autumn"
@@ -31,3 +36,10 @@ Downloaded via poly.pizza:
   rock_snow.glb     https://poly.pizza/m/eZRzCg5BcR   "Rock Snow"
   stump.glb         https://poly.pizza/m/nFvEbUX6LE   "Tree Stump with Moss"
   log.glb           https://poly.pizza/m/nwsYvcI0bC   "Wood Log with Moss"
+
+CC-BY 3.0 models (attribution required)
+---------------------------------------
+Licensed CC-BY 3.0: https://creativecommons.org/licenses/by/3.0/
+
+  bear.glb          https://poly.pizza/m/0PXWfxfb0Hu  "Bear" by Poly by Google
+  squirrel.glb      https://poly.pizza/m/caxos24uWC9  "Squirrel" by Poly by Google

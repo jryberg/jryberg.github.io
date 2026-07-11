@@ -81,10 +81,11 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
     <tr><td>M</td><td>sound on / off</td></tr>
   </table>
   <div class="note" id="menu-season"></div>
-  <div class="note">Chain kills for streak bonuses. Shoot the supply balloon for ammo and points.</div>
-  <div class="note">The <b>golden deer</b> is legendary. Don't miss.</div>
+  <div class="note">Deer, moose, bear, wolf, fox, hare, squirrel and grouse roam the valley.</div>
+  <div class="note">Chain kills for streaks. Shoot the supply balloon for ammo. Wounded bears <b>charge</b>.</div>
+  <div class="note">The <b>golden deer</b> is legendary. Don't miss. Deep water means swimming, not shooting.</div>
   <div class="note" id="menu-best"></div>
-  <div class="note">Wildlife &amp; nature models by Quaternius (CC0)</div>
+  <div class="note">Models by Quaternius (CC0) &amp; Poly by Google (CC-BY 3.0)</div>
   <button id="start" disabled>loading assets&hellip;</button>
 </div>
 <div id="err">Could not load the 3D engine (WebGL or CDN unavailable).<br>The deer live to see another day.</div>
@@ -498,11 +499,15 @@ const foam = BABYLON.MeshBuilder.CreateTorus('foam', { diameter: POND.r * 1.9, t
 foam.position = V3(POND.x, waterY + 0.1, POND.z);
 foam.scaling.y = 0.12;
 const foamMat = new BABYLON.StandardMaterial('foamM', scene);
-foamMat.diffuseColor = C3('#FFFFFF');
-foamMat.emissiveColor = C3('#9FDFEF');
+foamMat.diffuseColor = C3('#EAF6FA');
 foamMat.specularColor = C3('#000000');
+foamMat.alpha = 0.75;
 foam.material = foamMat;
+foam.scaling.y = 0.08;
 foam.isPickable = false;
+// keep the lake out of the glow layer — no more radioactive shoreline
+glow.addExcludedMesh(water);
+glow.addExcludedMesh(foam);
 
 // ── Assets (Quaternius CC0 models, see assets/LICENSE.txt) ──────────────
 function flatMat(hex, emissive) {
@@ -514,7 +519,7 @@ function flatMat(hex, emissive) {
 }
 
 const ASSET_FILES = [
-  'deer_doe', 'deer_stag',
+  'deer_doe', 'deer_stag', 'fox', 'wolf', 'hare', 'bear', 'squirrel',
   'pine_cluster', 'pine_snow', 'pine_autumn',
   'birch', 'birch_snow', 'tree_1', 'tree_2', 'tree_autumn',
   'bush', 'bush_berries', 'bush_snow',
@@ -605,6 +610,9 @@ function plantModel(name, transforms, opts) {
   const ref = o.norm === 'max' ? Math.max(dims.x, dims.y, dims.z) : dims.y;
   const baseScale = (o.height || 8) / Math.max(ref, 0.001);
   const scaleM = BABYLON.Matrix.Scaling(baseScale, baseScale, baseScale);
+  // Quaternius models often have their origin at the TOP of the geometry —
+  // lift each instance so the model's lowest point sits on the ground
+  const liftM = BABYLON.Matrix.Translation(0, -hb.min.y * baseScale, 0);
   const q = new BABYLON.Quaternion();
   const tmpOut = new BABYLON.Matrix();
   for (const src of cont.meshes) {
@@ -615,6 +623,7 @@ function plantModel(name, transforms, opts) {
       BABYLON.Quaternion.FromEulerAnglesToRef(t.tx, t.rotY, t.tz, q);
       const treeM = BABYLON.Matrix.Compose(V3(t.s, t.s * t.sy, t.s), q, V3(t.x, terrainH(t.x, t.z) + (o.yOff || 0) * t.s, t.z));
       local.multiplyToRef(scaleM, tmpOut);
+      tmpOut.multiplyToRef(liftM, tmpOut);
       tmpOut.multiplyToRef(treeM, tmpOut);
       tmpOut.copyToArray(buf, i * 16);
     });
@@ -693,21 +702,52 @@ function buildVegetation() {
   }
 }
 
-// ── Deer (animated Quaternius models) ───────────────────────────────────
+// ── Animals (Quaternius CC0 + Google Poly CC-BY, see assets/LICENSE.txt) ─
 const MAT_GOLD = (() => {
   const m = flatMat('#FFD84A');
   m.emissiveColor = C3('#6A4E06');
   return m;
 })();
-const DEER_META = {};
-function measureDeer(name) {
+const TINTS = new Map();
+function tintedMat(src, hex, amt) {
+  const key = src.uniqueId + hex;
+  if (!TINTS.has(key)) {
+    const m = src.clone(src.name + '_tint');
+    const c = C3(hex);
+    m.diffuseColor = new BABYLON.Color3(
+      lerp(m.diffuseColor.r, c.r, amt),
+      lerp(m.diffuseColor.g, c.g, amt),
+      lerp(m.diffuseColor.b, c.b, amt));
+    TINTS.set(key, m);
+  }
+  return TINTS.get(key);
+}
+
+// label, target height (m), point multiplier, speeds, spawn weight
+const SPECIES = {
+  doe:      { model: 'deer_doe',  label: 'Doe',         h: 1.45, mult: 1,   walk: 1.1, flee: 9.5, w: 24 },
+  buck:     { model: 'deer_stag', label: 'Buck',        h: 1.75, mult: 2,   walk: 1.1, flee: 9.5, w: 14 },
+  golden:   { model: 'deer_stag', label: 'Golden deer', h: 1.75, mult: 5,   walk: 1.1, flee: 13,  w: 4, gold: true },
+  moose:    { model: 'deer_stag', label: 'Moose',       h: 2.35, mult: 3,   walk: 0.9, flee: 7.5, w: 8, tint: '#4A3826' },
+  bear:     { model: 'bear',      label: 'Bear',        h: 1.6,  mult: 4,   walk: 0.7, flee: 6.8, w: 7, charges: true, gait: 'waddle' },
+  wolf:     { model: 'wolf',      label: 'Wolf',        h: 0.95, mult: 3,   walk: 1.5, flee: 12,  w: 6 },
+  fox:      { model: 'fox',       label: 'Fox',         h: 0.65, mult: 2.5, walk: 1.3, flee: 11,  w: 12 },
+  hare:     { model: 'hare',      label: 'Hare',        h: 0.55, mult: 3,   walk: 1.2, flee: 10,  w: 13, gait: 'hop' },
+  squirrel: { model: 'squirrel',  label: 'Squirrel',    h: 0.4,  mult: 4,   walk: 0.9, flee: 8,   w: 8, gait: 'hop', forest: true }
+};
+const ANIMAL_MODELS = ['deer_doe', 'deer_stag', 'bear', 'wolf', 'fox', 'hare', 'squirrel'];
+const ANIM_META = {};
+function measureAnimal(name) {
   const cont = LIB[name];
   const inst = cont.instantiateModelsToScene(n => n, false, { doNotInstantiate: true });
   const probe = new BABYLON.TransformNode('probe', scene);
   inst.rootNodes.forEach(r => { r.parent = probe; });
   probe.computeWorldMatrix(true);
+  probe.getChildMeshes().forEach(m => {
+    if (m.refreshBoundingInfo) { try { m.refreshBoundingInfo(true); } catch (e) {} }
+  });
   const hb = probe.getHierarchyBoundingVectors(true);
-  DEER_META[name] = {
+  ANIM_META[name] = {
     h: Math.max(hb.max.y - hb.min.y, 0.01),
     len: Math.max(hb.max.x - hb.min.x, hb.max.z - hb.min.z, 0.01),
     yMin: hb.min.y
@@ -715,6 +755,16 @@ function measureDeer(name) {
   inst.animationGroups.forEach(g => g.dispose());
   inst.skeletons.forEach(s => s.dispose());
   probe.dispose(false, false);
+}
+function pickSpecies() {
+  let total = 0;
+  for (const k in SPECIES) total += SPECIES[k].w;
+  let r = Math.random() * total;
+  for (const k in SPECIES) {
+    r -= SPECIES[k].w;
+    if (r <= 0) return k;
+  }
+  return 'doe';
 }
 
 const deerList = [];
@@ -726,28 +776,29 @@ function activity() {
 }
 
 function spawnDeer(anywhere) {
-  let a, r, x, z, tries = 0;
+  const key = pickSpecies();
+  const sp = SPECIES[key];
+  let a, r, x, z, tries = 0, ok = false;
   do {
     a = Math.random() * TAU;
     r = anywhere ? 60 + Math.random() * 260 : 240 + Math.random() * 160;
     x = Math.cos(a) * r; z = Math.sin(a) * r;
-  } while (!pondClear(x, z, 8) && ++tries < 12);
-  const roll = Math.random();
-  const rarity = roll < 0.05 ? 2 : roll < 0.4 ? 1 : 0;
-  const modelName = rarity >= 1 ? 'deer_stag' : 'deer_doe';
-  const meta = DEER_META[modelName];
-  const inst = LIB[modelName].instantiateModelsToScene(n => n, false, { doNotInstantiate: true });
+    ok = pondClear(x, z, 8) && (sp.forest ? forestDensity(x, z) > 0.12 : forestDensity(x, z) < 0.4);
+  } while (!ok && ++tries < 20);
+  const sc = collide(x, z, 1.2);
+  x = sc[0]; z = sc[1];
+  const meta = ANIM_META[sp.model];
+  const inst = LIB[sp.model].instantiateModelsToScene(n => n, false, { doNotInstantiate: true });
 
-  const root = new BABYLON.TransformNode('deer', scene);
-  const bodyNode = new BABYLON.TransformNode('deerBody', scene);
+  const root = new BABYLON.TransformNode('animal', scene);
+  const bodyNode = new BABYLON.TransformNode('animalBody', scene);
   bodyNode.parent = root;
   bodyNode.rotation.y = Math.PI;              // glTF forward → our +Z forward
   bodyNode.position.y = -meta.yMin;
   inst.rootNodes.forEach(rn => { rn.parent = bodyNode; });
 
-  const targetH = rarity >= 1 ? 1.75 : 1.45;
-  const size = 0.95 + Math.random() * 0.25;
-  const baseScale = (targetH / meta.h) * size;
+  const size = 0.92 + Math.random() * 0.16;
+  const baseScale = (sp.h / meta.h) * size;
   root.scaling.setAll(baseScale);
 
   // invisible hit boxes (stable regardless of animation pose)
@@ -766,7 +817,6 @@ function spawnDeer(anywhere) {
   hbox(0.26 * H, 0.34 * H, 0.32 * L, 0, 0.88 * H, 0.36 * L, 'head');
   hbox(0.30 * H, 0.42 * H, 0.55 * L, 0, 0.20 * H, -0.02 * L, 'leg');
 
-  // animations (names like "Idle", "Walk", "Gallop", "Eating")
   const groups = inst.animationGroups;
   groups.forEach(g => g.stop());
   const pickA = (...keys) => {
@@ -778,20 +828,21 @@ function spawnDeer(anywhere) {
   };
   const anims = {
     idle: pickA('idle'),
-    eating: pickA('eating', 'idle_headlow', 'idle'),
+    eating: pickA('eating', 'idle_headlow', 'idle_2_headlow', 'idle'),
     walk: pickA('walk'),
     gallop: pickA('gallop', 'walk')
   };
 
   const d = {
-    root, rarity, baseScale,
+    root, sp, gold: !!sp.gold, baseScale,
     x, z, heading: Math.random() * TAU,
     state: anywhere ? 'graze' : 'walk', t: 3 + Math.random() * 6,
-    dist: 999, wounded: false, woundT: 0, sparkle: null,
+    dist: 999, wounded: false, woundT: 0, sparkle: null, phase: Math.random() * TAU,
+    hasAnims: groups.length > 0,
     vitalZ: 0.1 * L * baseScale,
     anims, groups, skeletons: inst.skeletons, animKey: '', curG: null,
     play(k) {
-      if (this.animKey === k) return;
+      if (!this.hasAnims || this.animKey === k) return;
       const g = this.anims[k];
       if (!g) return;
       if (this.curG) this.curG.stop();
@@ -804,10 +855,12 @@ function spawnDeer(anywhere) {
   boxes.forEach(b => { b.metadata.deer = d; });
   root.getChildMeshes().forEach(m => { if (m.isVisible) shadowGen.addShadowCaster(m); });
 
-  if (rarity === 2) {
+  if (sp.gold) {
     root.getChildMeshes().forEach(m => { if (m.isVisible) m.material = MAT_GOLD; });
     d.sparkle = sparkleSystem(root);
     if (state === 'play') msg('✨ A legendary golden deer has appeared!');
+  } else if (sp.tint) {
+    root.getChildMeshes().forEach(m => { if (m.isVisible && m.material) m.material = tintedMat(m.material, sp.tint, 0.75); });
   }
   d.play(d.state === 'graze' ? 'eating' : 'walk');
   deerList.push(d);
@@ -832,23 +885,33 @@ const killFx = [];
 function harvestDeer(d) {
   d.state = 'gone';
   if (d.sparkle) d.sparkle.stop();
-  confetti(V3(d.x, terrainH(d.x, d.z) + 1, d.z), d.rarity === 2);
+  confetti(V3(d.x, terrainH(d.x, d.z) + 1, d.z), d.gold);
   killFx.push({ d, t: 0 });
 }
+function maulPlayer(d) {
+  score = Math.max(0, score - 200);
+  maulT = 1;
+  recoil = 1.6;
+  banner('MAULED! -200');
+  msg('The bear got you! It lumbers off…');
+  playNoise(0.6, 260, 0.8);
+  fleeDeer(d, player.x, player.z);
+}
 function updateDeer(dt) {
-  const target = clamp(Math.round(1 + 5 * activity()), 1, 6);
+  const target = clamp(Math.round(2 + 5 * activity()), 2, 7);
   let live = 0;
   for (const d of deerList) if (d.state !== 'gone') live++;
   spawnT -= dt;
-  if (live < target && spawnT <= 0) { spawnDeer(false); spawnT = 5 + Math.random() * 12; }
+  if (live < target && spawnT <= 0) { spawnDeer(false); spawnT = 5 + Math.random() * 10; }
 
   for (let i = deerList.length - 1; i >= 0; i--) {
     const d = deerList[i];
     if (d.state === 'gone') continue;
+    const sp = d.sp;
     d.t -= dt;
     d.dist = Math.hypot(d.x - player.x, d.z - player.z);
 
-    if (d.state !== 'flee') {
+    if (d.state !== 'flee' && d.state !== 'charge') {
       if (d.dist < 22) fleeDeer(d, player.x, player.z);
       else if (d.dist < 50 && playerMoving && Math.random() < dt * 0.8) { d.state = 'alert'; d.t = 3 + Math.random() * 4; }
     }
@@ -862,22 +925,36 @@ function updateDeer(dt) {
         }
         break;
       case 'walk': {
-        d.x += Math.sin(d.heading) * 1.1 * dt;
-        d.z += Math.cos(d.heading) * 1.1 * dt;
+        d.x += Math.sin(d.heading) * sp.walk * dt;
+        d.z += Math.cos(d.heading) * sp.walk * dt;
         const r = Math.hypot(d.x, d.z);
         if (r > 480) d.heading = Math.atan2(-d.x, -d.z);
         else if (r > 300 && Math.random() < dt * 0.25) d.heading = Math.atan2(-d.x, -d.z) + (Math.random() - 0.5);
         if (!pondClear(d.x, d.z, 6)) d.heading = Math.atan2(d.x - POND.x, d.z - POND.z);
+        const wc = collide(d.x, d.z, 0.7);
+        d.x = wc[0]; d.z = wc[1];
         if (d.t <= 0) { d.state = 'graze'; d.t = 4 + Math.random() * 8; }
         break;
       }
       case 'alert':
         if (d.t <= 0) { d.state = 'graze'; d.t = 3 + Math.random() * 5; }
         break;
+      case 'charge': {
+        d.heading = Math.atan2(player.x - d.x, player.z - d.z);
+        d.x += Math.sin(d.heading) * 6.5 * dt;
+        d.z += Math.cos(d.heading) * 6.5 * dt;
+        const cc = collide(d.x, d.z, 0.7);
+        d.x = cc[0]; d.z = cc[1];
+        if (d.dist < 2.4) maulPlayer(d);
+        else if (d.t <= 0) fleeDeer(d, player.x, player.z);
+        break;
+      }
       case 'flee': {
-        const spd = d.rarity === 2 ? 13 : 9.5;
+        const spd = sp.flee;
         d.x += Math.sin(d.heading) * spd * dt;
         d.z += Math.cos(d.heading) * spd * dt;
+        const fc = collide(d.x, d.z, 0.7);
+        d.x = fc[0]; d.z = fc[1];
         if (d.wounded) {
           d.woundT -= dt;
           if (d.woundT <= 0) { harvestDeer(d); continue; }
@@ -886,8 +963,22 @@ function updateDeer(dt) {
         break;
       }
     }
-    d.play(d.state === 'flee' ? 'gallop' : d.state === 'walk' ? 'walk' : d.state === 'graze' ? 'eating' : 'idle');
-    d.root.position.set(d.x, terrainH(d.x, d.z), d.z);
+    d.play(d.state === 'flee' || d.state === 'charge' ? 'gallop' : d.state === 'walk' ? 'walk' : d.state === 'graze' ? 'eating' : 'idle');
+
+    // code-driven gait for the models that ship without animation clips
+    let bounce = 0;
+    if (!d.hasAnims) {
+      const moving = d.state === 'walk' || d.state === 'flee' || d.state === 'charge';
+      d.phase += dt * (d.state === 'walk' ? 7 : 15);
+      if (moving) {
+        if (sp.gait === 'hop') bounce = Math.abs(Math.sin(d.phase)) * 0.35 * sp.h;
+        else {
+          bounce = Math.abs(Math.sin(d.phase)) * 0.06 * sp.h;
+          d.root.rotation.z = Math.sin(d.phase) * 0.07;
+        }
+      } else d.root.rotation.z = 0;
+    }
+    d.root.position.set(d.x, terrainH(d.x, d.z) + bounce, d.z);
     d.root.rotation.y = d.heading;
   }
   // harvest animation: spin up, shrink, vanish in confetti
@@ -899,6 +990,87 @@ function updateDeer(dt) {
     k.d.root.rotation.y += dt * 14;
     k.d.root.position.y += dt * 3.5 * (1 - p);
     k.d.root.scaling.setAll(k.d.baseScale * Math.max(0.05, 1 - p * p));
+  }
+}
+
+// ── Birds (procedural grouse — shoot them on the wing) ──────────────────
+const birdList = [];
+let birdTimer = 15;
+function spawnBird() {
+  const root = new BABYLON.TransformNode('bird', scene);
+  const dark = flatMat('#3A3A42');
+  const mk = m => { m.material = dark; m.parent = root; m.isPickable = false; return m; };
+  const body = mk(BABYLON.MeshBuilder.CreateSphere('bb', { diameter: 0.34, segments: 5 }, scene));
+  body.scaling.set(1, 0.85, 1.9);
+  const head = mk(BABYLON.MeshBuilder.CreateSphere('bh', { diameter: 0.18, segments: 4 }, scene));
+  head.position.set(0, 0.1, 0.3);
+  const beak = mk(BABYLON.MeshBuilder.CreateCylinder('bk', { diameterTop: 0.01, diameterBottom: 0.05, height: 0.12, tessellation: 4 }, scene));
+  beak.material = flatMat('#E8A030');
+  beak.position.set(0, 0.1, 0.42);
+  beak.rotation.x = Math.PI / 2;
+  const tail = mk(BABYLON.MeshBuilder.CreateBox('bt', { width: 0.16, height: 0.03, depth: 0.22 }, scene));
+  tail.position.set(0, 0.02, -0.32);
+  tail.rotation.x = -0.2;
+  const wings = [];
+  for (const sgn of [-1, 1]) {
+    const pivot = new BABYLON.TransformNode('wp', scene);
+    pivot.parent = root;
+    pivot.position.set(sgn * 0.12, 0.06, 0.02);
+    const wing = mk(BABYLON.MeshBuilder.CreateBox('bw', { width: 0.55, height: 0.02, depth: 0.26 }, scene));
+    wing.position.x = sgn * 0.3;
+    wing.parent = pivot;
+    wings.push({ pivot, sgn });
+  }
+  const hit = BABYLON.MeshBuilder.CreateBox('bhit', { width: 1.5, height: 0.9, depth: 1.6 }, scene);
+  hit.parent = root;
+  hit.isVisible = false;
+
+  const a = Math.random() * TAU;
+  const x = Math.cos(a) * 380, z = Math.sin(a) * 380;
+  const bird = {
+    root, wings, x, z,
+    heading: Math.atan2(-x, -z) + (Math.random() - 0.5) * 0.5,
+    spd: 11 + Math.random() * 5,
+    alt: 16 + Math.random() * 14,
+    y: 0, ph: Math.random() * TAU, state: 'fly', vy: 0
+  };
+  bird.y = terrainH(x, z) + bird.alt;
+  hit.metadata = { zone: 'bird', bird };
+  birdList.push(bird);
+}
+function disposeBird(b, i) {
+  b.root.dispose(false, true);
+  birdList.splice(i, 1);
+}
+function updateBirds(dt) {
+  birdTimer -= dt;
+  if (birdTimer <= 0 && birdList.length < 2 && light > 0.35 && state === 'play') {
+    spawnBird();
+    birdTimer = 22 + Math.random() * 30;
+  }
+  for (let i = birdList.length - 1; i >= 0; i--) {
+    const b = birdList[i];
+    b.ph += dt * 13;
+    if (b.state === 'fly') {
+      b.x += Math.sin(b.heading) * b.spd * dt;
+      b.z += Math.cos(b.heading) * b.spd * dt;
+      const ty = terrainH(b.x, b.z) + b.alt;
+      b.y += (ty - b.y) * Math.min(1, dt * 1.2);
+      b.wings.forEach(w => { w.pivot.rotation.z = w.sgn * (0.25 + Math.sin(b.ph) * 0.75); });
+      if (Math.hypot(b.x, b.z) > 520) { disposeBird(b, i); continue; }
+    } else {
+      b.vy -= 22 * dt;
+      b.y += b.vy * dt;
+      b.root.rotation.z += dt * 9;
+      const g = terrainH(b.x, b.z);
+      if (b.y <= g + 0.2) {
+        confetti(V3(b.x, g + 0.4, b.z), false);
+        disposeBird(b, i);
+        continue;
+      }
+    }
+    b.root.position.set(b.x, b.y, b.z);
+    b.root.rotation.y = b.heading;
   }
 }
 
@@ -1138,6 +1310,7 @@ const keys = {};
 let playerMoving = false;
 let hitMarkT = 0, bobT = 0, flash = 0, thunderIn = -1;
 let pointerLocked = false, virtualLook = false;
+let swimming = false, maulT = 0;
 let vmx = 0, vmy = 0;
 let tracerMesh = null, tracerT = 0;
 let elapsed = 0;
@@ -1281,6 +1454,7 @@ function terrainRayDist(ox, oy, oz, d, maxD) {
 const pickPredicate = m => !!(m.metadata && m.metadata.zone && m.isEnabled());
 function fire() {
   if (state !== 'play' || reloadT > 0 || fireCd > 0) return;
+  if (swimming) { clickSound(); msg("Can't shoot while swimming"); return; }
   if (ammo <= 0) { clickSound(); msg('Out of ammo — press R to reload'); return; }
   const rifle = RIFLES[rifleIdx];
   ammo--;
@@ -1312,14 +1486,17 @@ function fire() {
 
   pick = scene.pickWithRay(new BABYLON.Ray(origin, dir2, 1200), pickPredicate);
   const tD = terrainRayDist(player.x, player.y, player.z, dir2, 1200);
-  let impact, hitDeer = null, hitCrate = false, zone = '';
+  let impact, hitAnimal = null, hitBird = null, hitCrate = false, zone = '';
   if (pick && pick.hit && pick.distance < tD) {
     impact = pick.pickedPoint;
     zone = pick.pickedMesh.metadata.zone;
     if (zone === 'crate') hitCrate = true;
-    else {
-      hitDeer = pick.pickedMesh.metadata.deer || null;
-      if (hitDeer && hitDeer.state === 'gone') hitDeer = null;
+    else if (zone === 'bird') {
+      hitBird = pick.pickedMesh.metadata.bird || null;
+      if (hitBird && hitBird.state !== 'fly') hitBird = null;
+    } else {
+      hitAnimal = pick.pickedMesh.metadata.deer || null;
+      if (hitAnimal && hitAnimal.state === 'gone') hitAnimal = null;
     }
   } else {
     impact = origin.add(dir2.scale(tD));
@@ -1339,6 +1516,17 @@ function fire() {
   tracerT = 0.08;
 
   const nowT = elapsed;
+  const applyStreak = () => {
+    if (nowT - lastKillAt < 12) streak++; else streak = 1;
+    lastKillAt = nowT;
+    return streak >= 4 ? 500 : streak === 3 ? 300 : streak === 2 ? 100 : 0;
+  };
+  const streakBanner = bonus => {
+    if (streak >= 4) banner('RAMPAGE! +' + bonus);
+    else if (streak === 3) banner('TRIPLE! +' + bonus);
+    else if (streak === 2) banner('DOUBLE! +' + bonus);
+  };
+
   if (hitCrate) {
     popSound();
     fanfare();
@@ -1349,43 +1537,59 @@ function fire() {
     msg('Ammo refilled!');
     hitMarkT = 0.25;
     popCrate();
-  } else if (hitDeer) {
+  } else if (hitBird) {
     const dist = Math.round(BABYLON.Vector3.Distance(origin, impact));
-    // vital zone = the front third of the body
+    const bonus = applyStreak();
+    const pts = Math.max(5, Math.round((260 + dist * 2 + bonus) / 5) * 5);
+    bumpScore(pts);
+    kills++;
+    hitMarkT = 0.25;
+    ding(Math.min(streak, 6));
+    dmgPopup(impact, '+' + pts, false);
+    banner('WING SHOT!');
+    msg('Grouse at ' + dist + ' m — +' + pts);
+    hitBird.state = 'fall';
+    hitBird.vy = 3;
+    thud();
+  } else if (hitAnimal) {
+    const sp = hitAnimal.sp;
+    const dist = Math.round(BABYLON.Vector3.Distance(origin, impact));
     let zMult = 1;
     if (zone === 'head') zMult = 2;
     else if (zone === 'body') {
-      const localZ = (impact.x - hitDeer.x) * Math.sin(hitDeer.heading) + (impact.z - hitDeer.z) * Math.cos(hitDeer.heading);
-      if (localZ > hitDeer.vitalZ) { zone = 'vital'; zMult = 1.5; }
+      const localZ = (impact.x - hitAnimal.x) * Math.sin(hitAnimal.heading) + (impact.z - hitAnimal.z) * Math.cos(hitAnimal.heading);
+      if (localZ > hitAnimal.vitalZ) { zone = 'vital'; zMult = 1.5; }
     }
-    const rarityMult = hitDeer.rarity === 2 ? 5 : hitDeer.rarity === 1 ? 2 : 1;
     hitMarkT = 0.25;
     if (zone === 'leg') {
-      hitDeer.wounded = true;
-      hitDeer.woundT = 1 + Math.random() * 1.5;
-      fleeDeer(hitDeer, player.x, player.z);
-      const pts = Math.max(5, Math.round(dist * rarityMult / 5) * 5);
-      bumpScore(pts);
-      kills++;
-      dmgPopup(impact, '+' + pts, hitDeer.rarity === 2);
-      msg("Winged it! It won't get far…");
+      if (sp.charges) {
+        hitAnimal.state = 'charge';
+        hitAnimal.t = 12;
+        playNoise(0.5, 300, 0.7);
+        banner('BEAR CHARGE!');
+        msg('You made the bear angry. RUN!');
+      } else {
+        hitAnimal.wounded = true;
+        hitAnimal.woundT = 1 + Math.random() * 1.5;
+        fleeDeer(hitAnimal, player.x, player.z);
+        const pts = Math.max(5, Math.round(dist * sp.mult / 5) * 5);
+        bumpScore(pts);
+        kills++;
+        dmgPopup(impact, '+' + pts, hitAnimal.gold);
+        msg("Winged it! It won't get far…");
+      }
     } else {
-      if (nowT - lastKillAt < 12) streak++; else streak = 1;
-      lastKillAt = nowT;
-      const streakBonus = streak >= 4 ? 500 : streak === 3 ? 300 : streak === 2 ? 100 : 0;
-      const pts = Math.max(5, Math.round((dist * zMult * rarityMult + streakBonus) / 5) * 5);
+      const bonus = applyStreak();
+      const pts = Math.max(5, Math.round((dist * zMult * sp.mult + bonus) / 5) * 5);
       bumpScore(pts);
       kills++;
       ding(Math.min(streak, 6));
-      dmgPopup(impact, '+' + pts, hitDeer.rarity === 2);
-      if (hitDeer.rarity === 2) { fanfare(); banner('LEGENDARY HARVEST!'); }
-      else if (streak >= 4) banner('RAMPAGE! +' + streakBonus);
-      else if (streak === 3) banner('TRIPLE! +' + streakBonus);
-      else if (streak === 2) banner('DOUBLE! +' + streakBonus);
+      dmgPopup(impact, '+' + pts, hitAnimal.gold);
+      if (hitAnimal.gold) { fanfare(); banner('LEGENDARY HARVEST!'); }
+      else if (streak >= 2) streakBanner(bonus);
       else if (zone === 'head' && dist > 180) banner('PERFECT SHOT!');
-      const what = hitDeer.rarity === 2 ? 'Golden deer' : hitDeer.rarity === 1 ? 'Buck' : 'Doe';
-      msg(what + ' at ' + dist + ' m — +' + pts);
-      harvestDeer(hitDeer);
+      msg(sp.label + ' at ' + dist + ' m — +' + pts);
+      harvestDeer(hitAnimal);
     }
   } else {
     // miss: splash or dirt puff
@@ -1399,9 +1603,9 @@ function fire() {
     streak = 0;
   }
 
-  // every deer hears the shot
+  // every animal hears the shot
   for (const d of deerList) {
-    if (d === hitDeer || d.state === 'gone' || d.state === 'flee') continue;
+    if (d === hitAnimal || d.state === 'gone' || d.state === 'flee' || d.state === 'charge') continue;
     const m = Math.hypot(d.x - impact.x, d.z - impact.z);
     if (m < 12) fleeDeer(d, impact.x, impact.z);
     else if (d.state === 'alert' && m < 60) fleeDeer(d, impact.x, impact.z);
@@ -1503,7 +1707,7 @@ function updateHUD(dt, now) {
   const wdir = wx.wind < -0.5 ? '←' : wx.wind > 0.5 ? '→' : '·';
   el('wline2').textContent = 'wind ' + wdir + ' ' + Math.abs(wx.wind).toFixed(1) + ' m/s · sun ' + fmtH(sun.sunrise) + '–' + fmtH(sun.sunset);
   el('score').textContent = score;
-  el('stats').textContent = 'deer ' + kills + ' · best ' + best + (streak >= 2 ? ' · 🔥×' + streak : '');
+  el('stats').textContent = 'bag ' + kills + ' · best ' + best + (streak >= 2 ? ' · 🔥×' + streak : '');
   const rifle = RIFLES[rifleIdx];
   el('rname').textContent = '[' + (rifleIdx + 1) + '] ' + rifle.name + ' ×' + rifle.zoom;
   let ammoStr = '';
@@ -1511,7 +1715,7 @@ function updateHUD(dt, now) {
   const ammoEl = el('ammo');
   ammoEl.textContent = ammoStr;
   ammoEl.className = ammo === 0 ? 'empty' : '';
-  el('rhint').textContent = reloadT > 0 ? 'reloading…' : (ammo === 0 ? 'press R to reload' : '');
+  el('rhint').textContent = swimming ? 'swimming — keep the rifle dry!' : reloadT > 0 ? 'reloading…' : (ammo === 0 ? 'press R to reload' : '');
 }
 
 // ── Overlay (reticle / scope) ───────────────────────────────────────────
@@ -1550,13 +1754,13 @@ function drawOverlay() {
       const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
       const dot = (fwd.x * tx + fwd.y * ty + fwd.z * tz) / len;
       const ang = Math.acos(clamp(dot, -1, 1));
-      if (ang < bestAng) { bestAng = ang; bestD = { dist: Math.round(len), rarity: d.rarity }; }
+      if (ang < bestAng) { bestAng = ang; bestD = { dist: Math.round(len), gold: d.gold, label: d.sp.label }; }
     }
     if (bestD) {
-      octx.fillStyle = bestD.rarity === 2 ? 'rgba(255,216,74,0.95)' : 'rgba(240,245,240,0.9)';
+      octx.fillStyle = bestD.gold ? 'rgba(255,216,74,0.95)' : 'rgba(240,245,240,0.9)';
       octx.font = 'bold 14px monospace';
       octx.textAlign = 'center';
-      const tag = bestD.rarity === 2 ? '  ★ LEGENDARY' : bestD.rarity === 1 ? '  • buck' : '';
+      const tag = bestD.gold ? '  ★ LEGENDARY' : '  • ' + bestD.label.toLowerCase();
       octx.fillText(bestD.dist + ' m' + tag, cx, cy + r * 0.6);
     }
     // breath meter
@@ -1596,6 +1800,10 @@ function drawOverlay() {
     octx.fillStyle = 'rgba(235,240,255,' + flash * 0.5 + ')';
     octx.fillRect(0, 0, W, H);
   }
+  if (maulT > 0.01) {
+    octx.fillStyle = 'rgba(200,30,20,' + maulT * 0.4 + ')';
+    octx.fillRect(0, 0, W, H);
+  }
 }
 
 // ── Main loop ───────────────────────────────────────────────────────────
@@ -1608,9 +1816,8 @@ el('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
 
 loadAssets().then(() => {
   buildVegetation();
-  measureDeer('deer_doe');
-  measureDeer('deer_stag');
-  for (let i = 0; i < 3; i++) spawnDeer(true);
+  ANIMAL_MODELS.forEach(measureAnimal);
+  for (let i = 0; i < 4; i++) spawnDeer(true);
   worldReady = true;
   const btn = el('start');
   btn.disabled = false;
@@ -1634,7 +1841,7 @@ engine.runRenderLoop(() => {
 
   playerMoving = false;
   if (state === 'play') {
-    const spd = 4.2 * (scoped ? 0.4 : 1);
+    const spd = (swimming ? 1.7 : 4.2) * (scoped ? 0.4 : 1);
     let fx = 0, fz = 0;
     if (keys.KeyW) fx += 1;
     if (keys.KeyS) fx -= 1;
@@ -1653,7 +1860,20 @@ engine.runRenderLoop(() => {
       player.x = cc[0]; player.z = cc[1];
       bobT += dt * 8;
     }
-    player.y = terrainH(player.x, player.z) + 1.7 + Math.sin(bobT) * 0.05 * (playerMoving ? 1 : 0);
+    const th = terrainH(player.x, player.z);
+    const nowSwim = waterY - th > 1.15;      // deep water → swim
+    if (nowSwim && !swimming) {
+      dustPuff(V3(player.x, waterY + 0.2, player.z), '#BFF0FF');
+      playNoise(0.25, 700, 0.5);
+    }
+    swimming = nowSwim;
+    if (swimming) {
+      scoped = false;
+      bobT += dt * 2.2;
+      player.y = waterY + 0.5 + Math.sin(bobT) * 0.07;
+    } else {
+      player.y = th + 1.7 + Math.sin(bobT) * 0.05 * (playerMoving ? 1 : 0);
+    }
 
     const lookRate = scoped ? 0.3 : 1.3;
     if (keys.ArrowLeft) player.yaw -= lookRate * dt;
@@ -1698,7 +1918,8 @@ engine.runRenderLoop(() => {
   camera.rotation.set(player.pitch + swPitch, player.yaw + swYaw, 0);
 
   updateSky();
-  if (state === 'play' && worldReady) { updateDeer(dt); updateCrate(dt, elapsed); }
+  maulT = Math.max(0, maulT - dt * 1.4);
+  if (state === 'play' && worldReady) { updateDeer(dt); updateCrate(dt, elapsed); updateBirds(dt); }
 
   // precipitation follows the hunter
   camAnchor.copyFrom(camera.position);
@@ -1734,7 +1955,7 @@ engine.runRenderLoop(() => {
   }
 
   // gentle water shimmer
-  waterMat.emissiveColor = C3('#0E4E66').scale(0.7 + Math.sin(elapsed * 1.4) * 0.15 + light * 0.5);
+  waterMat.emissiveColor = C3('#0E4E66').scale(0.3 + Math.sin(elapsed * 1.4) * 0.06 + light * 0.25);
 
   if (windG) windG.gain.value = muted ? 0 : 0.02 + Math.abs(wx.wind) / 8 * 0.12 + wx.precip * 0.1;
 

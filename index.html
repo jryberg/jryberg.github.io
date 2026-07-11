@@ -24,6 +24,10 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 @keyframes blink { 50% { opacity: 0; } }
 #sl-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:#0a0a0a; z-index:2000; overflow:hidden; }
 #sl-pre { position:absolute; top:0; left:0; margin:0; padding:8px; color:#d4d4d4; font-family:'Cascadia Code','Fira Code','JetBrains Mono','Consolas','Monaco',monospace; font-size:14px; line-height:1.4; white-space:pre; }
+#vi-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:#0a0a0a; z-index:2000; overflow:hidden; }
+#vi-pre { position:absolute; top:0; left:0; margin:0; padding:8px; color:#d4d4d4; font-family:'Cascadia Code','Fira Code','JetBrains Mono','Consolas','Monaco',monospace; font-size:14px; line-height:1.4; white-space:pre; }
+.vi-inv { background:#d4d4d4; color:#0a0a0a; }
+.vi-tilde { color:#5f87d7; }
 /* X11 Window Manager - Motif/CDE style */
 .x11-window { position: fixed; background: #b4b4b4; border: 2px outset #d8d8d8; box-shadow: 2px 2px 8px rgba(0,0,0,0.5); z-index: 1000; min-width: 320px; min-height: 240px; display: flex; flex-direction: column; }
 .x11-titlebar { display: flex; align-items: center; height: 24px; background: linear-gradient(to bottom, #c8c8c8, #a0a0a0); border-bottom: 2px groove #888; padding: 0 3px; cursor: default; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
@@ -40,29 +44,253 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 (function() {
   'use strict';
 
-  // Virtual filesystem
-  var fs = {
-    '/': { type: 'dir', children: ['home', 'etc', 'usr', 'var', 'tmp'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/home': { type: 'dir', children: ['guest'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/home/guest': { type: 'dir', children: ['contact.txt', '.bashrc', 'projects.txt', 'Documents'], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
-    '/home/guest/contact.txt': { type: 'file', content: 'johan@ryberg.se\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
-    '/home/guest/.bashrc': { type: 'file', content: '# ~/.bashrc: executed by bash(1) for non-login shells.\n# see /usr/share/doc/bash/examples/startup-files for examples\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
-    '/home/guest/projects.txt': { type: 'file', content: 'Projects\n========\n\ngojinja\n-------\nA Go implementation of the Jinja2 template engine.\nFull support for Jinja2 syntax, designed for embedding in Go applications.\n\n  Source:  https://github.com/jryberg/gojinja\n  Docs:    https://securit.se/gojinja/stable/\n', owner: 'guest', group: 'guest', mode: '-rw-r--r--' },
-    '/home/guest/Documents': { type: 'dir', children: [], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
-    '/etc': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/usr': { type: 'dir', children: ['bin'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/usr/bin': { type: 'dir', children: ['clock', 'deerhunt', 'floppy'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
-    '/usr/bin/deerhunt': { type: 'file', content: '', executable: true, xapp: true, src: 'deerhunt.html', windowTitle: 'Deer Hunt', winW: 1024, winH: 720, owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
-    '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
-    '/var': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/tmp': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxrwxrwt' }
+  // ── BusyBox emulation: environment & persistent filesystem ──────────────
+  // The shell emulates `busybox ash` (BusyBox v1.37.0) with a large subset of
+  // applets. Every change the visitor makes (vi, cp, rm, mkdir, redirections,
+  // ...) is recorded in an overlay persisted to localStorage, so the browser
+  // acts as the machine's disk and survives reloads. `fsreset -f` reformats.
+  var BB_VERSION = '1.37.0';
+  var BB_BUILD = '2026-06-06 12:00:00 UTC';
+  var HOME = '/home/guest';
+  var env = {
+    HOME: HOME, USER: 'guest', LOGNAME: 'guest', SHELL: '/bin/sh',
+    TERM: 'xterm-256color', HOSTNAME: 'securit',
+    PATH: '/usr/bin:/usr/sbin:/bin:/sbin',
+    PWD: HOME, OLDPWD: HOME, EDITOR: 'vi', LANG: 'C.UTF-8'
   };
+  var lastExit = 0;
+  var BOOT_TIME = Date.now();
+  var BASE_MTIME = new Date(2026, 2, 1, 12, 0, 0).getTime();
 
-  var cwd = '/home/guest';
+  function dirEntry(children, extra) {
+    var e = { type: 'dir', children: children || [], owner: 'root', group: 'root', mode: 'drwxr-xr-x', mtime: BASE_MTIME };
+    if (extra) for (var k in extra) e[k] = extra[k];
+    return e;
+  }
+  function fileEntry(content, extra) {
+    var e = { type: 'file', content: content, owner: 'root', group: 'root', mode: '-rw-r--r--', mtime: BASE_MTIME };
+    if (extra) for (var k in extra) e[k] = extra[k];
+    return e;
+  }
+  function devEntry(kind, mode) {
+    return { type: 'file', content: '', dev: kind, owner: 'root', group: 'root', mode: mode || 'crw-rw-rw-', mtime: BASE_MTIME };
+  }
+  function procEntry(kind) {
+    return { type: 'file', content: '', proc: kind, owner: 'root', group: 'root', mode: '-r--r--r--', mtime: BASE_MTIME };
+  }
+
+  function buildBaseFS() {
+    return {
+      '/': dirEntry(['bin', 'dev', 'etc', 'home', 'proc', 'root', 'sbin', 'tmp', 'usr', 'var']),
+      '/bin': dirEntry([]),   // populated with busybox applet links at boot
+      '/sbin': dirEntry([]),
+      '/bin/busybox': fileEntry('', { executable: true, mode: '-rwxr-xr-x' }),
+      '/dev': dirEntry(['null', 'random', 'tty', 'urandom', 'vda1', 'zero']),
+      '/dev/null': devEntry('null'),
+      '/dev/zero': devEntry('zero'),
+      '/dev/random': devEntry('random'),
+      '/dev/urandom': devEntry('random'),
+      '/dev/tty': devEntry('tty'),
+      '/dev/vda1': devEntry('disk', 'brw-rw----'),
+      '/etc': dirEntry(['group', 'hostname', 'hosts', 'motd', 'os-release', 'passwd', 'profile', 'resolv.conf', 'shadow']),
+      '/etc/hostname': fileEntry('securit\n'),
+      '/etc/hosts': fileEntry('127.0.0.1\tlocalhost\n127.0.1.1\tsecurit securit.se\n\n::1\tlocalhost ip6-localhost ip6-loopback\n'),
+      '/etc/motd': fileEntry('Welcome to securit.se\n\nThis system runs BusyBox and your browser is its disk: everything you\nchange (vi, cp, rm, mkdir, >redirects, ...) is stored locally and\nsurvives reloads. Type `help` for built-ins, `busybox` for applets,\nand `fsreset -f` to reformat the disk back to factory state.\n'),
+      '/etc/os-release': fileEntry('NAME="Securit Linux"\nVERSION="26.06"\nID=securit\nPRETTY_NAME="Securit Linux 26.06 (BusyBox v' + BB_VERSION + ')"\nHOME_URL="https://securit.se/"\n'),
+      '/etc/passwd': fileEntry('root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/bin/false\nsshd:x:100:65534::/run/sshd:/bin/false\nguest:x:1000:1000:guest:/home/guest:/bin/sh\n'),
+      '/etc/group': fileEntry('root:x:0:\ndaemon:x:1:\ndisk:x:6:\nguest:x:1000:\n'),
+      '/etc/shadow': fileEntry('root:$6$rounds=656000$REDACTED:20200:0:99999:7:::\n', { mode: '-rw-------' }),
+      '/etc/profile': fileEntry('# /etc/profile: system-wide profile for the Bourne shells\n\nexport PATH="/usr/bin:/usr/sbin:/bin:/sbin"\nif [ "$PS1" ]; then\n  cat /etc/motd 2>/dev/null\nfi\n'),
+      '/etc/resolv.conf': fileEntry('nameserver 192.168.1.1\nsearch lan\n'),
+      '/home': dirEntry(['guest']),
+      '/home/guest': dirEntry(['.profile', 'Documents', 'contact.txt', 'projects.txt'], { owner: 'guest', group: 'guest' }),
+      '/home/guest/.profile': fileEntry("# ~/.profile: executed by the ash shell at login.\n\nexport PS1='\\u@\\h:\\w\\$ '\nexport EDITOR=vi\n", { owner: 'guest', group: 'guest' }),
+      '/home/guest/contact.txt': fileEntry('johan@ryberg.se\n', { owner: 'guest', group: 'guest' }),
+      '/home/guest/projects.txt': fileEntry('Projects\n========\n\ngojinja\n-------\nA Go implementation of the Jinja2 template engine.\nFull support for Jinja2 syntax, designed for embedding in Go applications.\n\n  Source:  https://github.com/jryberg/gojinja\n  Docs:    https://securit.se/gojinja/stable/\n', { owner: 'guest', group: 'guest' }),
+      '/home/guest/Documents': dirEntry([], { owner: 'guest', group: 'guest' }),
+      '/proc': dirEntry(['cpuinfo', 'meminfo', 'uptime', 'version'], { mode: 'dr-xr-xr-x' }),
+      '/proc/cpuinfo': procEntry('cpuinfo'),
+      '/proc/meminfo': procEntry('meminfo'),
+      '/proc/uptime': procEntry('uptime'),
+      '/proc/version': procEntry('version'),
+      '/root': dirEntry([], { mode: 'drwx------' }),
+      '/tmp': dirEntry([], { mode: 'drwxrwxrwt' }),
+      '/usr': dirEntry(['bin', 'sbin']),
+      '/usr/bin': dirEntry(['clock', 'deerhunt', 'floppy']),
+      '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock', owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
+      '/usr/bin/deerhunt': { type: 'file', content: '', executable: true, xapp: true, src: 'deerhunt.html', windowTitle: 'Deer Hunt', winW: 1024, winH: 720, owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
+      '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy', owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
+      '/usr/sbin': dirEntry([]),
+      '/var': dirEntry(['log']),
+      '/var/log': dirEntry(['messages']),
+      '/var/log/messages': fileEntry('Mar  1 12:00:01 securit syslogd started: BusyBox v' + BB_VERSION + '\nMar  1 12:00:01 securit kernel: EXT4-fs (vda1): mounted filesystem with ordered data mode\nMar  1 12:00:02 securit kernel: random: crng init done\nMar  1 12:00:03 securit sshd[204]: Server listening on 0.0.0.0 port 22.\n')
+    };
+  }
+
+  var fs = null;   // populated by bootFS()
+
+  // Persistence: the overlay maps absolute path -> entry (or null = deleted).
+  var FS_KEY = 'securit.fs.v1';
+  var HIST_KEY = 'securit.hist.v1';
+  var overlay = {};
+  var storageOK = true;
+
+  function loadJSON(key) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+  }
+  function persistFS() {
+    try { localStorage.setItem(FS_KEY, JSON.stringify(overlay)); storageOK = true; }
+    catch (e) { storageOK = false; }
+    return storageOK;
+  }
+  function markDirty(path) {
+    overlay[path] = fs[path] || null;
+  }
+  function bootFS() {
+    fs = buildBaseFS();
+    registerAppletBinaries();
+    var saved = loadJSON(FS_KEY);
+    if (saved && typeof saved === 'object') {
+      overlay = saved;
+      Object.keys(overlay).forEach(function(p) {
+        if (overlay[p] === null) delete fs[p];
+        else fs[p] = overlay[p];
+      });
+    }
+  }
+
+  // Path helpers
+  function normPath(p, base) {
+    if (!p) return base || cwd;
+    if (p === '~') p = env.HOME;
+    else if (p.slice(0, 2) === '~/') p = env.HOME + p.slice(1);
+    if (p.charAt(0) !== '/') p = (base || cwd) + '/' + p;
+    var parts = p.split('/');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var s = parts[i];
+      if (!s || s === '.') continue;
+      if (s === '..') out.pop();
+      else out.push(s);
+    }
+    return '/' + out.join('/');
+  }
+  function parentOf(p) { var i = p.lastIndexOf('/'); return i <= 0 ? '/' : p.slice(0, i); }
+  function baseName(p) { if (p === '/') return '/'; return p.slice(p.lastIndexOf('/') + 1); }
+  function cloneEntry(e) { return JSON.parse(JSON.stringify(e)); }
+
+  // Permissions: guest may read anything with the others-read bit (or own
+  // files), and may only write below $HOME and /tmp.
+  function canRead(path) {
+    var e = fs[path];
+    if (!e) return false;
+    if (e.owner === 'guest') return true;
+    return (e.mode || '').charAt(7) === 'r';
+  }
+  function canWritePath(path) {
+    if (path === '/dev/null') return true;
+    return path === HOME || path.indexOf(HOME + '/') === 0 || path === '/tmp' || path.indexOf('/tmp/') === 0;
+  }
+
+  function devRead(e) {
+    if (e.dev === 'random') {
+      var s = '';
+      for (var i = 0; i < 192; i++) s += String.fromCharCode(33 + Math.floor(Math.random() * 94));
+      return s + '\n';
+    }
+    return '';
+  }
+  function procRead(kind) {
+    if (kind === 'uptime') {
+      var up = (Date.now() - BOOT_TIME) / 1000 + 4242;
+      return up.toFixed(2) + ' ' + (up * 0.97).toFixed(2) + '\n';
+    }
+    if (kind === 'version') {
+      return 'Linux version 6.1.0-37-amd64 (builder@securit) (gcc (Debian 12.2.0-14) 12.2.0) #1 SMP PREEMPT_DYNAMIC Debian 6.1.140-1 (2025-05-22)\n';
+    }
+    if (kind === 'meminfo') {
+      return 'MemTotal:        2013452 kB\nMemFree:         1524188 kB\nMemAvailable:    1730040 kB\nBuffers:           38124 kB\nCached:           281550 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n';
+    }
+    if (kind === 'cpuinfo') {
+      var n = (navigator.hardwareConcurrency || 2), s = '';
+      for (var i = 0; i < n; i++) {
+        s += 'processor\t: ' + i + '\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Xeon(R) CPU @ 2.20GHz\ncpu MHz\t\t: 2199.998\ncache size\t: 56320 KB\nbogomips\t: 4399.99\n\n';
+      }
+      return s;
+    }
+    return '';
+  }
+
+  // File primitives used by the applets. All return {ok:...} or {error:'...'}.
+  function readFile(path) {
+    var e = fs[path];
+    if (!e) return { error: 'No such file or directory' };
+    if (e.type === 'dir') return { error: 'Is a directory' };
+    if (!canRead(path)) return { error: 'Permission denied' };
+    if (e.dev) return { content: devRead(e) };
+    if (e.proc) return { content: procRead(e.proc) };
+    return { content: e.content };
+  }
+  function writeFile(path, content, opts) {
+    opts = opts || {};
+    var e = fs[path];
+    if (e && (e.dev || path === '/dev/null')) return { ok: true };   // devices discard
+    if (e && e.type === 'dir') return { error: 'Is a directory' };
+    if (!canWritePath(path)) return { error: 'Permission denied' };
+    if (!e) {
+      var pp = parentOf(path), parent = fs[pp];
+      if (!parent) return { error: 'No such file or directory' };
+      if (parent.type !== 'dir') return { error: 'Not a directory' };
+      e = { type: 'file', content: '', owner: 'guest', group: 'guest', mode: '-rw-r--r--', mtime: Date.now() };
+      fs[path] = e;
+      if (parent.children.indexOf(baseName(path)) < 0) parent.children.push(baseName(path));
+      markDirty(pp);
+    }
+    e.content = opts.append ? e.content + content : content;
+    e.mtime = Date.now();
+    markDirty(path);
+    if (!persistFS()) return { ok: true, warn: 'No space left on device' };
+    return { ok: true };
+  }
+  function mkdirNode(path) {
+    if (fs[path]) return { error: 'File exists' };
+    var pp = parentOf(path), parent = fs[pp];
+    if (!parent || parent.type !== 'dir') return { error: parent ? 'Not a directory' : 'No such file or directory' };
+    if (!canWritePath(path)) return { error: 'Permission denied' };
+    fs[path] = { type: 'dir', children: [], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x', mtime: Date.now() };
+    parent.children.push(baseName(path));
+    markDirty(pp);
+    markDirty(path);
+    persistFS();
+    return { ok: true };
+  }
+  function removeNode(path) {
+    var e = fs[path];
+    if (!e) return { error: 'No such file or directory' };
+    if (!canWritePath(path)) return { error: 'Permission denied' };
+    Object.keys(fs).forEach(function(p) {
+      if (p === path || p.indexOf(path + '/') === 0) { delete fs[p]; overlay[p] = null; }
+    });
+    var pp = parentOf(path), parent = fs[pp];
+    if (parent && parent.children) {
+      var i = parent.children.indexOf(baseName(path));
+      if (i >= 0) parent.children.splice(i, 1);
+      markDirty(pp);
+    }
+    persistFS();
+    return { ok: true };
+  }
+
+  function pathDirs() { return env.PATH.split(':').filter(Boolean); }
+
+  var cwd = HOME;
   var prevDir = cwd;
-  var history = [];
-  var historyIndex = -1;
+  var history = loadJSON(HIST_KEY) || [];
+  var historyIndex = history.length;
+  function persistHistory() {
+    if (history.length > 500) history = history.slice(history.length - 500);
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(history)); } catch (e) { /* full disk */ }
+  }
   var terminal = document.getElementById('terminal');
 
   // Process management (Linux-realistic PIDs)
@@ -76,14 +304,13 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     { pid: 312, user: 'root', cpu: '0.0', mem: '0.1', vsz: 17180, rss: 7416, tty: '?', stat: 'Ss', command: 'sshd: guest [priv]' },
     { pid: 354, user: 'guest', cpu: '0.0', mem: '0.1', vsz: 17180, rss: 4520, tty: '?', stat: 'S', command: 'sshd: guest@pts/0' }
   ];
-  var bashPid = 355;
+  var shellPid = 355;
   var nextPid = 356;
   var processes = {};
   var jobs = {};
   var nextJobId = 1;
   var foregroundPid = null;
   var completedJobs = [];
-  var PATH = ['/usr/bin'];
 
   function escapeHTML(str) {
     var div = document.createElement('div');
@@ -92,23 +319,13 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   }
 
   function resolvePath(p) {
-    if (!p || p === '~') return '/home/guest';
     if (p === '-') return prevDir;
-    if (p.startsWith('~/')) p = '/home/guest/' + p.slice(2);
-    if (!p.startsWith('/')) p = cwd + '/' + p;
-    var parts = p.split('/').filter(Boolean);
-    var resolved = [];
-    for (var i = 0; i < parts.length; i++) {
-      if (parts[i] === '.') continue;
-      else if (parts[i] === '..') { if (resolved.length) resolved.pop(); }
-      else resolved.push(parts[i]);
-    }
-    return '/' + resolved.join('/') || '/';
+    return normPath(p);
   }
 
   function getDisplayPath() {
-    if (cwd === '/home/guest') return '~';
-    if (cwd.startsWith('/home/guest/')) return '~/' + cwd.slice(12);
+    if (cwd === env.HOME) return '~';
+    if (cwd.indexOf(env.HOME + '/') === 0) return '~' + cwd.slice(env.HOME.length);
     return cwd;
   }
 
@@ -133,21 +350,42 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     return span;
   }
 
+  // Terminal output with basic ANSI SGR (color/bold) support, so applets can
+  // colorize like real busybox tools (ls --color, grep --color, ...).
+  var SGR_COLORS = {
+    30: '#0a0a0a', 31: '#e06c75', 32: '#57c457', 33: '#d7af5f', 34: '#5f87d7', 35: '#c678dd', 36: '#56b6c2', 37: '#d4d4d4',
+    90: '#6b6b6b', 91: '#ff7b86', 92: '#7ce38b', 93: '#e5c07b', 94: '#7aa2f7', 95: '#d3a4f0', 96: '#7dcfff', 97: '#ffffff'
+  };
+  function appendAnsiText(div, text) {
+    var re = /\x1b\[([0-9;]*)m/g;
+    var idx = 0, m, bold = false, color = null;
+    function emit(chunk) {
+      if (!chunk) return;
+      if (!bold && !color) { div.appendChild(document.createTextNode(chunk)); return; }
+      var span = document.createElement('span');
+      if (color) span.style.color = color;
+      if (bold) span.style.fontWeight = 'bold';
+      span.textContent = chunk;
+      div.appendChild(span);
+    }
+    while ((m = re.exec(text))) {
+      emit(text.slice(idx, m.index));
+      idx = m.index + m[0].length;
+      var codes = m[1] === '' ? [0] : m[1].split(';').map(Number);
+      for (var i = 0; i < codes.length; i++) {
+        if (codes[i] === 0) { bold = false; color = null; }
+        else if (codes[i] === 1) bold = true;
+        else if (SGR_COLORS[codes[i]]) color = SGR_COLORS[codes[i]];
+      }
+    }
+    emit(text.slice(idx));
+  }
   function addLine(text) {
     var div = document.createElement('div');
     div.className = 'line';
-    div.textContent = text;
-    terminal.insertBefore(div, inputLine);
-  }
-
-  function addLineWithDirName(prefix, name) {
-    var div = document.createElement('div');
-    div.className = 'line';
-    if (prefix) div.appendChild(document.createTextNode(prefix));
-    var span = document.createElement('span');
-    span.className = 'dir-name';
-    span.textContent = name;
-    div.appendChild(span);
+    var s = text === undefined || text === null ? '' : String(text);
+    if (s === '') div.appendChild(document.createTextNode(' '));
+    else appendAnsiText(div, s);
     terminal.insertBefore(div, inputLine);
   }
 
@@ -311,6 +549,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
     proc.status = 'done';
     delete processes[pid];
+    if (proc.onExit) proc.onExit();
     return true;
   }
 
@@ -322,10 +561,11 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
   }
 
-  // PATH resolution
+  // PATH resolution (for the X11 apps living in /usr/bin)
   function resolveFromPath(cmdName) {
-    for (var i = 0; i < PATH.length; i++) {
-      var binPath = PATH[i] + '/' + cmdName;
+    var dirs = pathDirs();
+    for (var i = 0; i < dirs.length; i++) {
+      var binPath = dirs[i] + '/' + cmdName;
       var entry = fs[binPath];
       if (entry && entry.type === 'file' && entry.executable) return { path: binPath, entry: entry };
     }
@@ -334,17 +574,6 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 
   function formatPsTime(d) {
     return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-  }
-
-  function isRestricted(path) {
-    var entry = fs[path];
-    if (entry && entry.restricted) return true;
-    var parts = path.split('/').filter(Boolean);
-    for (var i = 1; i <= parts.length; i++) {
-      var parent = '/' + parts.slice(0, i).join('/');
-      if (fs[parent] && fs[parent].restricted) return true;
-    }
-    return false;
   }
 
   function formatDate(d) {
@@ -540,6 +769,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       enableTerminalInput();
       updatePrompt();
       scrollToBottom();
+      if (proc.onExit) proc.onExit();
     }
 
     function tick() {
@@ -621,269 +851,2243 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       };
       document.addEventListener('keydown', escapeHandler);
     }
+    return proc;
   }
 
-  var commands = {
-    ls: function(args) {
-      var showAll = false;
-      var showLong = false;
-      var target = null;
-      for (var i = 0; i < args.length; i++) {
-        if (args[i] === '-a' || args[i] === '-la' || args[i] === '-al') showAll = true;
-        if (args[i] === '-l' || args[i] === '-la' || args[i] === '-al') showLong = true;
-        if (!args[i].startsWith('-')) target = args[i];
+  // ── Shell: tokenizer ─────────────────────────────────────────────────────
+  // Tokens are operators ({op:'|'}) or words: lists of {text, quote} segments
+  // where quote is null (expandable), "'" (literal) or '"' (vars expand).
+  function tokenize(line) {
+    var toks = [], i = 0, n = line.length, cur = null;
+    function seg(text, quote) {
+      if (!cur) cur = { word: [] };
+      cur.word.push({ text: text, quote: quote });
+    }
+    function flush() { if (cur) { toks.push(cur); cur = null; } }
+    while (i < n) {
+      var c = line[i];
+      if (c === ' ' || c === '\t') { flush(); i++; continue; }
+      if (c === '#' && !cur) break;
+      if (c === "'") {
+        var j = line.indexOf("'", i + 1);
+        if (j < 0) return { error: 'syntax error: unterminated quoted string' };
+        seg(line.slice(i + 1, j), "'");
+        i = j + 1; continue;
       }
-      var path = target ? resolvePath(target) : cwd;
-      if (isRestricted(path)) { addLine('ls: cannot open directory \'' + (target || '.') + '\': Permission denied'); return; }
-      var entry = fs[path];
-      if (!entry) { addLine('ls: cannot access \'' + (target || '.') + '\': No such file or directory'); return; }
-      if (entry.type === 'file') {
-        if (showLong) {
-          addLine((entry.mode || '-rw-r--r--') + ' 1 ' + (entry.owner || 'guest').padEnd(5) + ' ' + (entry.group || 'guest').padEnd(5) + ' ' + entry.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + path.split('/').pop());
-        } else {
-          addLine(path.split('/').pop());
+      if (c === '"') {
+        var buf = '', k = i + 1, closed = false;
+        while (k < n) {
+          var d = line[k];
+          if (d === '\\' && k + 1 < n && '"\\$`'.indexOf(line[k + 1]) >= 0) { buf += line[k + 1]; k += 2; continue; }
+          if (d === '"') { closed = true; break; }
+          buf += d; k++;
         }
+        if (!closed) return { error: 'syntax error: unterminated quoted string' };
+        seg(buf, '"');
+        i = k + 1; continue;
+      }
+      if (c === '\\' && i + 1 < n) { seg(line[i + 1], "'"); i += 2; continue; }
+      if (c === '&' && line[i + 1] === '&') { flush(); toks.push({ op: '&&' }); i += 2; continue; }
+      if (c === '|' && line[i + 1] === '|') { flush(); toks.push({ op: '||' }); i += 2; continue; }
+      if (c === '|') { flush(); toks.push({ op: '|' }); i++; continue; }
+      if (c === ';') { flush(); toks.push({ op: ';' }); i++; continue; }
+      if (c === '&') { flush(); toks.push({ op: '&' }); i++; continue; }
+      if (c === '2' && !cur && line[i + 1] === '>') {
+        if (line[i + 2] === '>') { toks.push({ op: '2>>' }); i += 3; continue; }
+        if (line[i + 2] === '&' && line[i + 3] === '1') { toks.push({ op: '2>&1' }); i += 4; continue; }
+        toks.push({ op: '2>' }); i += 2; continue;
+      }
+      if (c === '>') {
+        flush();
+        if (line[i + 1] === '>') { toks.push({ op: '>>' }); i += 2; } else { toks.push({ op: '>' }); i++; }
+        continue;
+      }
+      if (c === '<') { flush(); toks.push({ op: '<' }); i++; continue; }
+      var start = i;
+      while (i < n && ' \t\'"\\|&;<>'.indexOf(line[i]) < 0) i++;
+      seg(line.slice(start, i), null);
+    }
+    flush();
+    return { toks: toks };
+  }
+
+  // ── Shell: expansion ($VAR, ${VAR}, $?, ~, globs) ────────────────────────
+  function expandVars(text) {
+    var out = '', i = 0, m;
+    while (i < text.length) {
+      if (text[i] === '$') {
+        if (text[i + 1] === '?') { out += String(lastExit); i += 2; continue; }
+        if (text[i + 1] === '$') { out += String(shellPid); i += 2; continue; }
+        if (text[i + 1] === '{') {
+          var j = text.indexOf('}', i);
+          if (j > 0) { out += env[text.slice(i + 2, j)] || ''; i = j + 1; continue; }
+        }
+        m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i + 1));
+        if (m) { out += env[m[0]] !== undefined ? env[m[0]] : ''; i += 1 + m[0].length; continue; }
+      }
+      out += text[i]; i++;
+    }
+    return out;
+  }
+  function globToRegExp(pat) {
+    var re = '^';
+    for (var i = 0; i < pat.length; i++) {
+      var c = pat[i];
+      if (c === '*') re += '[^/]*';
+      else if (c === '?') re += '[^/]';
+      else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp(re + '$');
+  }
+  function expandGlobWord(word) {
+    var slash = word.lastIndexOf('/');
+    var dirPart = slash >= 0 ? word.slice(0, slash + 1) : '';
+    var pat = word.slice(slash + 1);
+    if (/[*?]/.test(dirPart) || !/[*?]/.test(pat)) return null;
+    var dirPath = dirPart ? normPath(dirPart) : cwd;
+    var dir = fs[dirPath];
+    if (!dir || dir.type !== 'dir' || !canRead(dirPath)) return null;
+    var re;
+    try { re = globToRegExp(pat); } catch (e) { return null; }
+    var out = [];
+    var names = dir.children.slice().sort();
+    for (var i = 0; i < names.length; i++) {
+      if (names[i].charAt(0) === '.' && pat.charAt(0) !== '.') continue;
+      if (re.test(names[i])) out.push(dirPart + names[i]);
+    }
+    return out.length ? out : null;
+  }
+  function expandWord(word) {
+    var text = '', mayGlob = false;
+    for (var i = 0; i < word.length; i++) {
+      var s = word[i];
+      if (s.quote === "'") text += s.text;
+      else if (s.quote === '"') text += expandVars(s.text);
+      else {
+        var t = expandVars(s.text);
+        if (i === 0 && (t === '~' || t.slice(0, 2) === '~/')) t = env.HOME + t.slice(1);
+        if (/[*?]/.test(t)) mayGlob = true;
+        text += t;
+      }
+    }
+    if (mayGlob) {
+      var g = expandGlobWord(text);
+      if (g) return g;
+    }
+    return [text];
+  }
+
+  // ── Shell: parser ────────────────────────────────────────────────────────
+  // Returns { items: [{op, pipe:[{words, redirs}], bg}] } where op is the
+  // operator linking the item to the previous one (';', '&&' or '||').
+  function parseTokens(tk) {
+    if (tk.error) return tk;
+    var toks = tk.toks;
+    var items = [], op = ';', pipe = [];
+    var cmd = { words: [], redirs: {} };
+    function cmdEmpty() { return !cmd.words.length && !Object.keys(cmd.redirs).length; }
+    function pushCmd() { pipe.push(cmd); cmd = { words: [], redirs: {} }; }
+    function pushItem(bg) {
+      if (!cmdEmpty()) pushCmd();
+      if (pipe.length) items.push({ op: op, pipe: pipe, bg: !!bg });
+      pipe = [];
+    }
+    var pendingRedir = null;
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i];
+      if (t.word) {
+        if (pendingRedir) { cmd.redirs[pendingRedir] = expandWord(t.word)[0]; pendingRedir = null; }
+        else cmd.words.push(t.word);
+        continue;
+      }
+      if (pendingRedir) return { error: 'syntax error near unexpected token `' + t.op + "'" };
+      if (t.op === '>') pendingRedir = 'out';
+      else if (t.op === '>>') pendingRedir = 'append';
+      else if (t.op === '<') pendingRedir = 'in';
+      else if (t.op === '2>') pendingRedir = 'err';
+      else if (t.op === '2>>') pendingRedir = 'errAppend';
+      else if (t.op === '2>&1') cmd.redirs.errToOut = true;
+      else if (t.op === '|') {
+        if (cmdEmpty()) return { error: "syntax error near unexpected token `|'" };
+        pushCmd();
+      } else {
+        pushItem(t.op === '&');
+        op = t.op === '&' ? ';' : t.op;
+      }
+    }
+    if (pendingRedir) return { error: 'syntax error: expected redirection target' };
+    pushItem(false);
+    return { items: items };
+  }
+
+  // ── Shell: execution ─────────────────────────────────────────────────────
+  var applets = {};
+  function defineApplets(obj) { for (var k in obj) applets[k] = obj[k]; }
+  // Applets that take over the screen / run in real time when started from an
+  // interactive prompt (standalone, without stdout redirection).
+  var INTERACTIVE = { vi: true, sl: true, sleep: true, yes: true };
+
+  function registerAppletBinaries() {
+    var names = Object.keys(applets).sort();
+    var bin = fs['/bin'];
+    for (var i = 0; i < names.length; i++) {
+      var p = '/bin/' + names[i];
+      if (!fs[p]) {
+        fs[p] = { type: 'file', content: '', executable: true, applet: true, linkTo: 'busybox', owner: 'root', group: 'root', mode: 'lrwxrwxrwx', mtime: BASE_MTIME };
+        bin.children.push(names[i]);
+      }
+    }
+    fs['/bin/busybox'].content = 'ELF ...busybox multi-call binary (stripped) ';
+    fs['/bin/busybox'].size = 1084216;
+    if (bin.children.indexOf('busybox') < 0) bin.children.push('busybox');
+    bin.children.sort();
+  }
+
+  function termWrite(text) {
+    if (!text) return;
+    var lines = String(text).split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    for (var i = 0; i < lines.length; i++) addLine(lines[i]);
+  }
+
+  function runCommandLine(line) {
+    var parsed = parseTokens(tokenize(line));
+    if (parsed.error) { addLine('sh: ' + parsed.error); lastExit = 2; return; }
+    runItems(parsed.items, 0);
+  }
+
+  function runItems(items, i) {
+    while (i < items.length) {
+      var it = items[i];
+      var skip = (it.op === '&&' && lastExit !== 0) || (it.op === '||' && lastExit === 0);
+      i++;
+      if (skip) continue;
+      var r = runPipeline(it, makeResume(items, i));
+      if (r === 'async') return;
+    }
+  }
+  function makeResume(items, i) {
+    return function() {
+      runItems(items, i);
+      updatePrompt();
+      scrollToBottom();
+    };
+  }
+
+  function runPipeline(item, cont) {
+    var procs = [];
+    for (var i = 0; i < item.pipe.length; i++) {
+      var argv = [];
+      for (var w = 0; w < item.pipe[i].words.length; w++) {
+        argv = argv.concat(expandWord(item.pipe[i].words[w]));
+      }
+      procs.push({ argv: argv, redirs: item.pipe[i].redirs });
+    }
+
+    // Leading VAR=value assignments
+    while (procs.length === 1 && procs[0].argv.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(procs[0].argv[0])) {
+      var asg = procs[0].argv.shift();
+      var eq = asg.indexOf('=');
+      env[asg.slice(0, eq)] = asg.slice(eq + 1);
+    }
+    if (procs.length === 1 && !procs[0].argv.length) { lastExit = 0; return; }
+
+    var first = procs[0];
+    var name0 = first.argv[0];
+
+    // Commands given as paths: /bin/ls, ./script, /usr/bin/deerhunt ...
+    if (name0 && name0.indexOf('/') >= 0) {
+      var tpath = normPath(name0);
+      var tentry = fs[tpath];
+      if (!tentry) { termWrite('sh: ' + name0 + ': not found\n'); lastExit = 127; return; }
+      if (tentry.type === 'dir') { termWrite('sh: ' + name0 + ': Is a directory\n'); lastExit = 126; return; }
+      if (!tentry.executable) { termWrite('sh: ' + name0 + ': Permission denied\n'); lastExit = 126; return; }
+      if (tentry.applet || baseName(tpath) === 'busybox') {
+        name0 = first.argv[0] = baseName(tpath) === 'busybox' ? 'busybox' : baseName(tpath);
+      } else if (tentry.xapp) {
+        // fall through to the xapp branch below
+      } else {
+        // user-made executable: run it as a shell script
+        if (procs.length > 1) { termWrite('sh: ' + name0 + ': cannot be piped\n'); lastExit = 1; return; }
+        lastExit = 0;
+        runScript(tentry.content);
         return;
       }
-      var items = entry.children.slice();
-      if (showAll) items = ['.', '..'].concat(items);
-      else items = items.filter(function(n) { return !n.startsWith('.'); });
-      if (showLong) {
-        if (showAll) addLine('total ' + items.length);
-        items.forEach(function(name) {
-          var childPath = (path === '/' ? '' : path) + '/' + name;
-          var child = fs[childPath];
-          var isDir = name === '.' || name === '..' || (child && child.type === 'dir');
-          var ref = (name === '.' || name === '..') ? entry : child;
-          var owner = (ref && ref.owner || 'root').padEnd(5);
-          var group = (ref && ref.group || 'root').padEnd(5);
-          if (isDir) {
-            var dmode = ref && ref.mode || 'drwxr-xr-x';
-            addLineWithDirName(dmode + ' 2 ' + owner + ' ' + group + ' 4096 Mar  1 12:00 ', name);
-          } else if (child && child.type === 'file') {
-            var fmode = child.mode || '-rw-r--r--';
-            addLine(fmode + ' 1 ' + owner + ' ' + group + ' ' + child.content.length.toString().padStart(4) + ' Mar  1 12:00 ' + name);
-          }
-        });
-      } else {
-        if (!items.length) return;
-        var div = document.createElement('div');
-        div.className = 'line';
-        items.forEach(function(name, idx) {
-          if (idx > 0) div.appendChild(document.createTextNode('  '));
-          var childPath = (path === '/' ? '' : path) + '/' + name;
-          var child = fs[childPath];
-          var isDir = name === '.' || name === '..' || (child && child.type === 'dir');
-          if (isDir) {
-            var span = document.createElement('span');
-            span.className = 'dir-name';
-            span.textContent = name;
-            div.appendChild(span);
-          } else {
-            div.appendChild(document.createTextNode(name));
-          }
-        });
-        terminal.insertBefore(div, inputLine);
+    }
+
+    // X11 applications
+    var xentry = null;
+    if (name0 && name0.indexOf('/') >= 0) {
+      var xe = fs[normPath(name0)];
+      if (xe && xe.xapp) xentry = xe;
+    } else if (name0 && !builtins[name0] && !applets[name0]) {
+      var rx = resolveFromPath(name0);
+      if (rx && rx.entry.xapp) xentry = rx.entry;
+    }
+    if (xentry) {
+      if (procs.length > 1) { termWrite('sh: ' + baseName(name0) + ': cannot run X11 applications in a pipeline\n'); lastExit = 1; return; }
+      spawnXApp(first.argv.join(' '), xentry, item.bg);
+      lastExit = 0;
+      if (!item.bg) {
+        if (foregroundPid !== null && processes[foregroundPid]) processes[foregroundPid].onExit = cont;
+        return 'async';
       }
-    },
-    cat: function(args) {
-      if (!args.length) { addLine('cat: missing operand'); return; }
-      var path = resolvePath(args[0]);
-      if (isRestricted(path)) { addLine('cat: ' + args[0] + ': Permission denied'); return; }
-      var entry = fs[path];
-      if (!entry) { addLine('cat: ' + args[0] + ': No such file or directory'); return; }
-      if (entry.type === 'dir') { addLine('cat: ' + args[0] + ': Is a directory'); return; }
-      var lines = entry.content.replace(/\n$/, '').split('\n');
-      lines.forEach(function(l) { addLine(l); });
-    },
-    cd: function(args) {
-      var target = args[0] || '~';
-      var path = resolvePath(target);
-      if (isRestricted(path)) { addLine('-bash: cd: ' + target + ': Permission denied'); return; }
-      var entry = fs[path];
-      if (!entry) { addLine('-bash: cd: ' + target + ': No such file or directory'); return; }
-      if (entry.type !== 'dir') { addLine('-bash: cd: ' + target + ': Not a directory'); return; }
+      return;
+    }
+
+    // Interactive applets (vi, sl, sleep, yes) — only standalone at a tty
+    if (procs.length === 1 && INTERACTIVE[name0] && !item.bg && !first.redirs.out && !first.redirs.append && !first.redirs.in) {
+      return runInteractive(name0, first.argv.slice(1), cont);
+    }
+
+    // Plain pipeline: run each command, feeding stdout to the next stdin
+    var carry = '';
+    var code = 0;
+    for (var p = 0; p < procs.length; p++) {
+      var pr = procs[p];
+      var input = carry;
+      if (pr.redirs.in) {
+        var rr = readFile(normPath(pr.redirs.in));
+        if (rr.error) {
+          termWrite('sh: can\'t open ' + pr.redirs.in + ': ' + rr.error + '\n');
+          lastExit = 1;
+          return;
+        }
+        input = rr.content;
+      }
+      var isLast = p === procs.length - 1;
+      var redirected = pr.redirs.out !== undefined || pr.redirs.append !== undefined;
+      var res = runSimple(pr.argv, input, { tty: isLast && !redirected });
+      code = res.code;
+      var stdout = res.stdout, stderr = res.stderr;
+      if (pr.redirs.errToOut) { stdout += stderr; stderr = ''; }
+      if (pr.redirs.err !== undefined || pr.redirs.errAppend !== undefined) {
+        var ep = normPath(pr.redirs.err !== undefined ? pr.redirs.err : pr.redirs.errAppend);
+        var ew = writeFile(ep, stderr, { append: pr.redirs.errAppend !== undefined });
+        if (ew.error) termWrite('sh: can\'t create ' + (pr.redirs.err || pr.redirs.errAppend) + ': ' + ew.error + '\n');
+        stderr = '';
+      }
+      if (stderr) termWrite(stderr);
+      if (redirected) {
+        var op2 = normPath(pr.redirs.out !== undefined ? pr.redirs.out : pr.redirs.append);
+        var ow = writeFile(op2, stdout, { append: pr.redirs.append !== undefined });
+        if (ow.error) { termWrite('sh: can\'t create ' + (pr.redirs.out || pr.redirs.append) + ': ' + ow.error + '\n'); code = 1; }
+        else if (ow.warn) termWrite('sh: write error: ' + ow.warn + '\n');
+        carry = '';
+      } else {
+        carry = stdout;
+      }
+    }
+    if (carry) termWrite(carry);
+    lastExit = code;
+  }
+
+  function runSimple(argv, stdin, io) {
+    if (!argv.length) return { code: 0, stdout: '', stderr: '' };
+    var name = argv[0];
+    var out = [], err = [];
+    var ctx = {
+      args: argv.slice(1),
+      argv0: name,
+      stdin: stdin || '',
+      tty: !!io.tty,
+      out: function(s) { out.push(s); },
+      println: function(s) { out.push(s + '\n'); },
+      err: function(s) { err.push(s + '\n'); },
+      error: function(s) { err.push(name + ': ' + s + '\n'); }
+    };
+    var fn = builtins[name] || applets[name];
+    if (!fn) return { code: 127, stdout: '', stderr: 'sh: ' + name + ': not found\n' };
+    var code;
+    try { code = fn(ctx) || 0; }
+    catch (e) { code = 1; err.push(name + ': ' + (e && e.message ? e.message : 'error') + '\n'); }
+    return { code: code, stdout: out.join(''), stderr: err.join('') };
+  }
+
+  function runScript(content) {
+    var lines = (content || '').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim();
+      if (!l || l.charAt(0) === '#') continue;
+      runCommandLine(l);
+    }
+  }
+
+  // ── Shell built-ins ──────────────────────────────────────────────────────
+  var builtins = {
+    cd: function(ctx) {
+      var target = ctx.args[0] || env.HOME;
+      var path = target === '-' ? prevDir : normPath(target);
+      var e = fs[path];
+      if (!e) { ctx.err("sh: cd: can't cd to " + target + ': No such file or directory'); return 2; }
+      if (e.type !== 'dir') { ctx.err("sh: cd: can't cd to " + target + ': Not a directory'); return 2; }
+      if (!canRead(path)) { ctx.err("sh: cd: can't cd to " + target + ': Permission denied'); return 2; }
+      if (target === '-') ctx.println(path);
       prevDir = cwd;
       cwd = path;
+      env.OLDPWD = env.PWD;
+      env.PWD = path;
+      return 0;
     },
-    pwd: function() { addLine(cwd); },
-    whoami: function() { addLine('guest'); },
-    hostname: function() { addLine('securit'); },
-    id: function() { addLine('uid=1000(guest) gid=1000(guest) groups=1000(guest)'); },
-    uname: function(args) {
-      if (args.indexOf('-a') !== -1) {
-        addLine('Linux securit 6.1.0-27-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.115-1 (2024-11-01) x86_64 GNU/Linux');
-      } else {
-        addLine('Linux');
+    export: function(ctx) {
+      if (!ctx.args.length) {
+        Object.keys(env).sort().forEach(function(k) { ctx.println('export ' + k + "='" + env[k] + "'"); });
+        return 0;
       }
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i], eq = a.indexOf('=');
+        if (eq > 0) env[a.slice(0, eq)] = a.slice(eq + 1);
+      }
+      return 0;
     },
-    clear: function() {
-      var lines = terminal.querySelectorAll('.line');
-      for (var i = 0; i < lines.length; i++) lines[i].remove();
+    unset: function(ctx) {
+      for (var i = 0; i < ctx.args.length; i++) delete env[ctx.args[i]];
+      return 0;
     },
-    help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, man, clock, floppy, deerhunt, help, exit');
+    'source': function(ctx) {
+      if (!ctx.args.length) { ctx.err('sh: source: filename argument required'); return 2; }
+      var r = readFile(normPath(ctx.args[0]));
+      if (r.error) { ctx.err('sh: source: ' + ctx.args[0] + ': ' + r.error); return 1; }
+      runScript(r.content);
+      return lastExit;
     },
-    echo: function(args) { addLine(args.join(' ')); },
-    date: function() { addLine(formatDate(new Date())); },
-    history: function() {
-      history.forEach(function(cmd, i) {
-        addLine('  ' + (i + 1).toString().padStart(4) + '  ' + cmd);
+    type: function(ctx) {
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var nm = ctx.args[i];
+        if (builtins[nm]) ctx.println(nm + ' is a shell builtin');
+        else if (applets[nm]) ctx.println(nm + ' is /bin/' + nm);
+        else {
+          var rx = resolveFromPath(nm);
+          if (rx) ctx.println(nm + ' is ' + rx.path);
+          else { ctx.err('sh: type: ' + nm + ': not found'); code = 1; }
+        }
+      }
+      return code;
+    },
+    umask: function(ctx) { ctx.println('0022'); return 0; },
+    history: function(ctx) {
+      if (ctx.args[0] === '-c') {
+        history = [];
+        historyIndex = 0;
+        persistHistory();
+        return 0;
+      }
+      for (var i = 0; i < history.length; i++) {
+        ctx.println('  ' + String(i + 1).padStart(4) + '  ' + history[i]);
+      }
+      return 0;
+    },
+    help: function(ctx) {
+      ctx.println(bbBanner());
+      ctx.println('Built-in commands:');
+      ctx.println('------------------');
+      ctx.println('\t' + Object.keys(builtins).sort().join(', '));
+      ctx.println('');
+      ctx.println("Type `busybox' to list the available applets. Everything you change");
+      ctx.println('on disk is persisted in this browser; `fsreset -f` reformats it.');
+      return 0;
+    },
+    fsreset: function(ctx) {
+      if (ctx.args[0] !== '-f') {
+        ctx.println('fsreset: restore the disk to the factory image, discarding every');
+        ctx.println('change stored in this browser. Run `fsreset -f` to confirm.');
+        return 1;
+      }
+      try { localStorage.removeItem(FS_KEY); } catch (e) { /* ignore */ }
+      overlay = {};
+      bootFS();
+      prevDir = cwd = env.PWD = env.OLDPWD = HOME;
+      ctx.println('mke2fs 1.47.0 (5-Feb-2023)');
+      ctx.println('/dev/vda1 contains a ext4 file system');
+      ctx.println('Filesystem restored to factory image.');
+      return 0;
+    },
+    exit: function(ctx) {
+      ctx.println('logout');
+      ctx.println('Connection to securit.se closed.');
+      input.disabled = true;
+      cursor.style.display = 'none';
+      return 0;
+    }
+  };
+
+  function bbBanner() {
+    return 'BusyBox v' + BB_VERSION + ' (' + BB_BUILD + ') built-in shell (ash)';
+  }
+
+  // ── Applets: filesystem ──────────────────────────────────────────────────
+  function parseFlags(args, known) {
+    var flags = {}, operands = [], bad = null, noMore = false;
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (!noMore && a === '--') { noMore = true; continue; }
+      if (!noMore && a.length > 2 && a.slice(0, 2) === '--') continue;   // ignore long opts
+      if (!noMore && a.charAt(0) === '-' && a.length > 1 && a.charAt(1) !== '-') {
+        for (var j = 1; j < a.length; j++) {
+          if (known.indexOf(a.charAt(j)) >= 0) flags[a.charAt(j)] = true;
+          else if (!bad) bad = a.charAt(j);
+        }
+      } else operands.push(a);
+    }
+    return { flags: flags, operands: operands, bad: bad };
+  }
+  function joinPath(dir, name) { return (dir === '/' ? '' : dir) + '/' + name; }
+  function entrySize(e) {
+    if (e.size) return e.size;
+    if (e.type === 'dir') return 4096;
+    return (e.content || '').length;
+  }
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function lsTime(ms) {
+    var d = new Date(ms || BASE_MTIME);
+    var day = String(d.getDate()).padStart(2, ' ');
+    if (Math.abs(Date.now() - d.getTime()) > 15552000000) {
+      return MONTHS[d.getMonth()] + ' ' + day + '  ' + d.getFullYear();
+    }
+    return MONTHS[d.getMonth()] + ' ' + day + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function lsName(name, e, tty) {
+    if (!tty || !e) return name;
+    if (e.type === 'dir') return '\x1b[1;34m' + name + '\x1b[0m';
+    if ((e.mode || '').charAt(0) === 'l') return '\x1b[1;36m' + name + '\x1b[0m';
+    if (e.executable) return '\x1b[1;32m' + name + '\x1b[0m';
+    return name;
+  }
+  function longLine(name, e, tty) {
+    return (e.mode || (e.type === 'dir' ? 'drwxr-xr-x' : '-rw-r--r--')) +
+      ' ' + String(e.type === 'dir' ? 2 : 1).padStart(4) +
+      ' ' + (e.owner || 'root').padEnd(8) + ' ' + (e.group || 'root').padEnd(8) +
+      ' ' + String(entrySize(e)).padStart(9) + ' ' + lsTime(e.mtime) + ' ' + lsName(name, e, tty) +
+      (e.linkTo ? ' -> ' + e.linkTo : '');
+  }
+  function childOf(path, name, e) {
+    if (name === '.') return e;
+    if (name === '..') return fs[parentOf(path)] || e;
+    return fs[joinPath(path, name)];
+  }
+
+  function copyNode(ctx, sp, dp, rec, srcArg) {
+    var se = fs[sp];
+    if (!se) { ctx.error("can't stat '" + srcArg + "': No such file or directory"); return 1; }
+    if (!canRead(sp)) { ctx.error("can't open '" + srcArg + "': Permission denied"); return 1; }
+    var de = fs[dp];
+    if (de && de.type === 'dir' && se.type !== 'dir') { dp = joinPath(dp, baseName(sp)); de = fs[dp]; }
+    if (sp === dp) { ctx.error("'" + srcArg + "' and '" + dp + "' are the same file"); return 1; }
+    if (se.type === 'dir') {
+      if (!rec) { ctx.error("-r not specified; omitting directory '" + srcArg + "'"); return 1; }
+      if (dp === sp || dp.indexOf(sp + '/') === 0) { ctx.error("can't copy a directory into itself"); return 1; }
+      if (de && de.type === 'dir') dp = joinPath(dp, baseName(sp));
+      if (!fs[dp]) {
+        var mr = mkdirNode(dp);
+        if (mr.error) { ctx.error("can't create directory '" + dp + "': " + mr.error); return 1; }
+      }
+      var code = 0;
+      var kids = se.children.slice();
+      for (var i = 0; i < kids.length; i++) {
+        if (copyNode(ctx, joinPath(sp, kids[i]), joinPath(dp, kids[i]), rec, joinPath(srcArg, kids[i]))) code = 1;
+      }
+      return code;
+    }
+    var rr = readFile(sp);
+    if (rr.error) { ctx.error("can't open '" + srcArg + "': " + rr.error); return 1; }
+    var w = writeFile(dp, rr.content);
+    if (w.error) { ctx.error("can't create '" + dp + "': " + w.error); return 1; }
+    if (se.executable && fs[dp]) {
+      fs[dp].executable = true;
+      fs[dp].mode = '-rwxr-xr-x';
+      markDirty(dp);
+      persistFS();
+    }
+    return 0;
+  }
+
+  function moveNode(ctx, sp, dp, srcArg) {
+    var se = fs[sp];
+    if (!se) { ctx.error("can't rename '" + srcArg + "': No such file or directory"); return 1; }
+    if (!canWritePath(sp)) { ctx.error("can't rename '" + srcArg + "': Permission denied"); return 1; }
+    var de = fs[dp];
+    if (de && de.type === 'dir') { dp = joinPath(dp, baseName(sp)); de = fs[dp]; }
+    if (sp === dp) return 0;
+    if (!canWritePath(dp)) { ctx.error("can't move to '" + dp + "': Permission denied"); return 1; }
+    if (dp.indexOf(sp + '/') === 0) { ctx.error("can't move '" + srcArg + "' into itself"); return 1; }
+    var pp = parentOf(dp);
+    if (!fs[pp] || fs[pp].type !== 'dir') { ctx.error("can't rename '" + srcArg + "': No such file or directory"); return 1; }
+    if (de) {
+      var rmr = removeNode(dp);
+      if (rmr.error) { ctx.error("can't overwrite '" + dp + "': " + rmr.error); return 1; }
+    }
+    var keys = Object.keys(fs).filter(function(p) { return p === sp || p.indexOf(sp + '/') === 0; });
+    keys.forEach(function(p) {
+      var np = dp + p.slice(sp.length);
+      fs[np] = fs[p];
+      markDirty(np);
+    });
+    keys.forEach(function(p) { delete fs[p]; overlay[p] = null; });
+    var spp = parentOf(sp);
+    if (fs[spp] && fs[spp].children) {
+      var ix = fs[spp].children.indexOf(baseName(sp));
+      if (ix >= 0) fs[spp].children.splice(ix, 1);
+      markDirty(spp);
+    }
+    if (fs[pp].children.indexOf(baseName(dp)) < 0) fs[pp].children.push(baseName(dp));
+    markDirty(pp);
+    persistFS();
+    return 0;
+  }
+
+  function applyChmod(e, spec) {
+    var m = e.mode || (e.type === 'dir' ? 'drwxr-xr-x' : '-rw-r--r--');
+    var t = m.charAt(0);
+    var bits = [];
+    for (var i = 0; i < 9; i++) bits.push(m.charAt(1 + i) !== '-');
+    if (/^[0-7]{3,4}$/.test(spec)) {
+      var s = spec.slice(-3);
+      for (var c = 0; c < 3; c++) {
+        var v = parseInt(s.charAt(c), 8);
+        bits[c * 3] = !!(v & 4); bits[c * 3 + 1] = !!(v & 2); bits[c * 3 + 2] = !!(v & 1);
+      }
+    } else {
+      var mm = /^([ugoa]*)([+=-])([rwx]+)$/.exec(spec);
+      if (!mm) return false;
+      var classes = [];
+      var who = mm[1] || 'a';
+      if (who.indexOf('a') >= 0 || who === '') classes = [0, 1, 2];
+      else {
+        if (who.indexOf('u') >= 0) classes.push(0);
+        if (who.indexOf('g') >= 0) classes.push(1);
+        if (who.indexOf('o') >= 0) classes.push(2);
+      }
+      var idx = { r: 0, w: 1, x: 2 };
+      classes.forEach(function(cl) {
+        if (mm[2] === '=') { bits[cl * 3] = bits[cl * 3 + 1] = bits[cl * 3 + 2] = false; }
+        for (var k = 0; k < mm[3].length; k++) {
+          bits[cl * 3 + idx[mm[3].charAt(k)]] = mm[2] !== '-';
+        }
       });
+    }
+    var rwx = 'rwxrwxrwx';
+    var out = t;
+    for (var b = 0; b < 9; b++) out += bits[b] ? rwx.charAt(b) : '-';
+    e.mode = out;
+    if (e.type === 'file') e.executable = bits[2] || bits[5] || bits[8];
+    return true;
+  }
+
+  defineApplets({
+    ls: function(ctx) {
+      var p = parseFlags(ctx.args, 'la1dhrtRF');
+      if (p.bad) { ctx.error("invalid option -- '" + p.bad + "'"); return 1; }
+      var f = p.flags;
+      var targets = p.operands.length ? p.operands : ['.'];
+      var code = 0, printed = 0;
+      for (var t = 0; t < targets.length; t++) {
+        var path = normPath(targets[t]);
+        var e = fs[path];
+        if (!e) { ctx.error(targets[t] + ': No such file or directory'); code = 1; continue; }
+        if (e.type === 'dir' && !f.d && !canRead(path)) { ctx.error("can't open '" + targets[t] + "': Permission denied"); code = 1; continue; }
+        if (targets.length > 1 && e.type === 'dir' && !f.d) ctx.println((printed++ ? '\n' : '') + targets[t] + ':');
+        if (e.type !== 'dir' || f.d) {
+          ctx.println(f.l ? longLine(targets[t], e, ctx.tty) : lsName(targets[t], e, ctx.tty));
+          continue;
+        }
+        var names = e.children.slice().sort();
+        if (f.a) names = ['.', '..'].concat(names);
+        else names = names.filter(function(n) { return n.charAt(0) !== '.'; });
+        if (f.t) names.sort(function(a, b) {
+          return ((childOf(path, b, e) || {}).mtime || 0) - ((childOf(path, a, e) || {}).mtime || 0);
+        });
+        if (f.r) names.reverse();
+        if (f.l) {
+          var total = 0;
+          names.forEach(function(n) {
+            var ce = childOf(path, n, e);
+            if (ce) total += ce.type === 'dir' ? 4 : Math.max(0, Math.ceil(entrySize(ce) / 1024)) * 4;
+          });
+          ctx.println('total ' + total);
+          names.forEach(function(n) {
+            var ce = childOf(path, n, e);
+            if (ce) ctx.println(longLine(n, ce, ctx.tty));
+          });
+        } else if (f['1'] || !ctx.tty) {
+          names.forEach(function(n) { ctx.println(lsName(n, childOf(path, n, e), ctx.tty)); });
+        } else if (names.length) {
+          ctx.println(names.map(function(n) { return lsName(n, childOf(path, n, e), ctx.tty); }).join('  '));
+        }
+      }
+      return code;
     },
-    exit: function() { addLine('logout'); addLine('Connection to securit.se closed.'); input.disabled = true; cursor.style.display = 'none'; },
-    ps: function(args) {
+    cat: function(ctx) {
+      var p = parseFlags(ctx.args, 'n');
+      var files = p.operands.length ? p.operands : ['-'];
+      var text = '', code = 0;
+      for (var i = 0; i < files.length; i++) {
+        if (files[i] === '-') { text += ctx.stdin; continue; }
+        var r = readFile(normPath(files[i]));
+        if (r.error) { ctx.error(files[i] + ': ' + r.error); code = 1; continue; }
+        text += r.content;
+      }
+      if (p.flags.n) {
+        var ln = text.split('\n');
+        if (ln[ln.length - 1] === '') ln.pop();
+        text = ln.map(function(l, i) { return String(i + 1).padStart(6) + '  ' + l; }).join('\n') + (ln.length ? '\n' : '');
+      }
+      ctx.out(text);
+      return code;
+    },
+    cp: function(ctx) {
+      var p = parseFlags(ctx.args, 'rRafpv');
+      var ops = p.operands;
+      if (ops.length < 2) { ctx.error('missing operand'); return 1; }
+      var rec = p.flags.r || p.flags.R || p.flags.a;
+      var dst = normPath(ops[ops.length - 1]);
+      var srcs = ops.slice(0, -1);
+      if (srcs.length > 1 && (!fs[dst] || fs[dst].type !== 'dir')) { ctx.error("'" + ops[ops.length - 1] + "' is not a directory"); return 1; }
+      var code = 0;
+      for (var i = 0; i < srcs.length; i++) {
+        if (copyNode(ctx, normPath(srcs[i]), dst, rec, srcs[i])) code = 1;
+      }
+      return code;
+    },
+    mv: function(ctx) {
+      var p = parseFlags(ctx.args, 'fv');
+      var ops = p.operands;
+      if (ops.length < 2) { ctx.error('missing operand'); return 1; }
+      var dst = normPath(ops[ops.length - 1]);
+      var srcs = ops.slice(0, -1);
+      if (srcs.length > 1 && (!fs[dst] || fs[dst].type !== 'dir')) { ctx.error("'" + ops[ops.length - 1] + "' is not a directory"); return 1; }
+      var code = 0;
+      for (var i = 0; i < srcs.length; i++) {
+        if (moveNode(ctx, normPath(srcs[i]), dst, srcs[i])) code = 1;
+      }
+      return code;
+    },
+    rm: function(ctx) {
+      var p = parseFlags(ctx.args, 'rRfiv');
+      if (!p.operands.length) { if (!p.flags.f) ctx.error('missing operand'); return p.flags.f ? 0 : 1; }
+      var rec = p.flags.r || p.flags.R;
+      var code = 0;
+      for (var i = 0; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        var e = fs[path];
+        if (!e) { if (!p.flags.f) { ctx.error("can't remove '" + p.operands[i] + "': No such file or directory"); code = 1; } continue; }
+        if (e.type === 'dir' && !rec) { ctx.error("'" + p.operands[i] + "' is a directory"); code = 1; continue; }
+        if (path === '/' || path === HOME) { ctx.error("can't remove '" + p.operands[i] + "': Operation not permitted"); code = 1; continue; }
+        var r = removeNode(path);
+        if (r.error) { ctx.error("can't remove '" + p.operands[i] + "': " + r.error); code = 1; }
+      }
+      return code;
+    },
+    mkdir: function(ctx) {
+      var p = parseFlags(ctx.args, 'pv');
+      if (!p.operands.length) { ctx.error('missing operand'); return 1; }
+      var code = 0;
+      for (var i = 0; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        if (p.flags.p) {
+          var parts = path.split('/').filter(Boolean);
+          var cur = '';
+          var ok = true;
+          for (var j = 0; j < parts.length; j++) {
+            cur += '/' + parts[j];
+            if (fs[cur] && fs[cur].type === 'dir') continue;
+            var r1 = mkdirNode(cur);
+            if (r1.error) { ctx.error("can't create directory '" + p.operands[i] + "': " + r1.error); code = 1; ok = false; break; }
+          }
+          if (!ok) continue;
+        } else {
+          var r2 = mkdirNode(path);
+          if (r2.error) { ctx.error("can't create directory '" + p.operands[i] + "': " + r2.error); code = 1; }
+        }
+      }
+      return code;
+    },
+    rmdir: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var path = normPath(ctx.args[i]);
+        var e = fs[path];
+        if (!e || e.type !== 'dir') { ctx.error("'" + ctx.args[i] + "': " + (e ? 'Not a directory' : 'No such file or directory')); code = 1; continue; }
+        if (e.children.length) { ctx.error("'" + ctx.args[i] + "': Directory not empty"); code = 1; continue; }
+        var r = removeNode(path);
+        if (r.error) { ctx.error("'" + ctx.args[i] + "': " + r.error); code = 1; }
+      }
+      return code;
+    },
+    touch: function(ctx) {
+      var p = parseFlags(ctx.args, 'c');
+      if (!p.operands.length) { ctx.error('missing operand'); return 1; }
+      var code = 0;
+      for (var i = 0; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        var e = fs[path];
+        if (e) {
+          if (!canWritePath(path)) { ctx.error("can't touch '" + p.operands[i] + "': Permission denied"); code = 1; continue; }
+          e.mtime = Date.now();
+          markDirty(path);
+          persistFS();
+        } else if (!p.flags.c) {
+          var r = writeFile(path, '');
+          if (r.error) { ctx.error("can't touch '" + p.operands[i] + "': " + r.error); code = 1; }
+        }
+      }
+      return code;
+    },
+    chmod: function(ctx) {
+      var p = parseFlags(ctx.args, 'R');
+      if (p.operands.length < 2) { ctx.error('missing operand'); return 1; }
+      var spec = p.operands[0];
+      var code = 0;
+      for (var i = 1; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        var e = fs[path];
+        if (!e) { ctx.error(p.operands[i] + ': No such file or directory'); code = 1; continue; }
+        if (!canWritePath(path)) { ctx.error(p.operands[i] + ': Operation not permitted'); code = 1; continue; }
+        if (!applyChmod(e, spec)) { ctx.error('invalid mode: ' + spec); return 1; }
+        markDirty(path);
+        persistFS();
+      }
+      return code;
+    },
+    stat: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var path = normPath(ctx.args[i]);
+        var e = fs[path];
+        if (!e) { ctx.error("can't stat '" + ctx.args[i] + "': No such file or directory"); code = 1; continue; }
+        var kind = e.type === 'dir' ? 'directory' : (e.dev ? 'character special file' : 'regular file');
+        var uid = e.owner === 'guest' ? 1000 : 0;
+        ctx.println('  File: ' + ctx.args[i]);
+        ctx.println('  Size: ' + String(entrySize(e)).padEnd(10) + ' Blocks: ' + (e.type === 'dir' ? 8 : Math.ceil(entrySize(e) / 512)).toString().padEnd(10) + ' IO Block: 4096   ' + kind);
+        ctx.println('Device: fe01h/65025d\tInode: ' + (100000 + (path.length * 977) % 899999) + '\tLinks: ' + (e.type === 'dir' ? 2 : 1));
+        ctx.println('Access: (' + modeOctal(e) + '/' + (e.mode || '-rw-r--r--') + ')  Uid: (' + String(uid).padStart(5) + '/' + (e.owner || 'root').padStart(8) + ')   Gid: (' + String(uid).padStart(5) + '/' + (e.group || 'root').padStart(8) + ')');
+        ctx.println('Modify: ' + new Date(e.mtime || BASE_MTIME).toISOString().replace('T', ' ').replace(/\..*/, '.000000000 +0000'));
+      }
+      return code;
+    },
+    find: function(ctx) {
+      var roots = [];
+      var namePat = null, typeF = null, maxDepth = Infinity;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-name') { namePat = ctx.args[++i]; }
+        else if (a === '-type') { typeF = ctx.args[++i]; }
+        else if (a === '-maxdepth') { maxDepth = parseInt(ctx.args[++i], 10); }
+        else if (a.charAt(0) === '-') { ctx.error(a + ': unknown option'); return 1; }
+        else roots.push(a);
+      }
+      if (!roots.length) roots = ['.'];
+      var re = namePat ? globToRegExp(namePat) : null;
+      var code = 0;
+      function walk(disp, path, depth) {
+        var e = fs[path];
+        if (!e) { ctx.error(disp + ': No such file or directory'); code = 1; return; }
+        var match = (!re || re.test(baseName(path))) &&
+          (!typeF || (typeF === 'd') === (e.type === 'dir'));
+        if (match) ctx.println(disp);
+        if (e.type === 'dir' && depth < maxDepth) {
+          if (!canRead(path)) { ctx.error(disp + ': Permission denied'); code = 1; return; }
+          e.children.slice().sort().forEach(function(n) {
+            walk(disp === '/' ? '/' + n : disp + '/' + n, joinPath(path, n), depth + 1);
+          });
+        }
+      }
+      for (var r = 0; r < roots.length; r++) walk(roots[r], normPath(roots[r]), 0);
+      return code;
+    },
+    du: function(ctx) {
+      var p = parseFlags(ctx.args, 'sh');
+      var targets = p.operands.length ? p.operands : ['.'];
+      var code = 0;
+      function sizeOf(path) {
+        var e = fs[path];
+        if (!e) return 0;
+        if (e.type !== 'dir') return entrySize(e);
+        var s = 4096;
+        e.children.forEach(function(n) { s += sizeOf(joinPath(path, n)); });
+        return s;
+      }
+      function fmt(bytes) {
+        var kb = Math.max(4, Math.ceil(bytes / 1024) * 4);
+        if (!p.flags.h) return String(kb);
+        return kb >= 1024 ? (kb / 1024).toFixed(1) + 'M' : kb + 'K';
+      }
+      function report(disp, path, top) {
+        var e = fs[path];
+        if (!e) { ctx.error("can't open '" + disp + "': No such file or directory"); code = 1; return; }
+        if (e.type === 'dir' && !p.flags.s && !top) { /* recurse below */ }
+        if (e.type === 'dir' && !p.flags.s) {
+          e.children.forEach(function(n) {
+            if (fs[joinPath(path, n)] && fs[joinPath(path, n)].type === 'dir') report(disp + '/' + n, joinPath(path, n), false);
+          });
+        }
+        ctx.println(fmt(sizeOf(path)) + '\t' + disp);
+      }
+      targets.forEach(function(t) { report(t, normPath(t), true); });
+      return code;
+    },
+    df: function(ctx) {
+      var p = parseFlags(ctx.args, 'h');
+      var used = 128 + Math.ceil(JSON.stringify(overlay).length / 1024);
+      var total = 5120;
+      var avail = Math.max(0, total - used);
+      var pct = Math.min(100, Math.round(used * 100 / total)) + '%';
+      if (p.flags.h) {
+        ctx.println('Filesystem                Size      Used Available Use% Mounted on');
+        ctx.println('/dev/vda1                 5.0M' + String((used / 1024).toFixed(1) + 'M').padStart(10) + String((avail / 1024).toFixed(1) + 'M').padStart(10) + pct.padStart(5) + ' /');
+        ctx.println('tmpfs                   983.1M         0    983.1M   0% /dev/shm');
+      } else {
+        ctx.println('Filesystem           1K-blocks      Used Available Use% Mounted on');
+        ctx.println('/dev/vda1                 5120' + String(used).padStart(10) + String(avail).padStart(10) + pct.padStart(5) + ' /');
+        ctx.println('tmpfs                  1006724         0   1006724   0% /dev/shm');
+      }
+      return 0;
+    },
+    tee: function(ctx) {
+      var p = parseFlags(ctx.args, 'a');
+      ctx.out(ctx.stdin);
+      var code = 0;
+      for (var i = 0; i < p.operands.length; i++) {
+        var w = writeFile(normPath(p.operands[i]), ctx.stdin, { append: p.flags.a });
+        if (w.error) { ctx.error(p.operands[i] + ': ' + w.error); code = 1; }
+      }
+      return code;
+    },
+    mktemp: function(ctx) {
+      var p = parseFlags(ctx.args, 'd');
+      var name = '/tmp/tmp.' + Math.random().toString(36).slice(2, 8);
+      var r = p.flags.d ? mkdirNode(name) : writeFile(name, '');
+      if (r.error) { ctx.error(r.error); return 1; }
+      ctx.println(name);
+      return 0;
+    },
+    realpath: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      for (var i = 0; i < ctx.args.length; i++) ctx.println(normPath(ctx.args[i]));
+      return 0;
+    },
+    readlink: function(ctx) {
+      var p = parseFlags(ctx.args, 'f');
+      if (!p.operands.length) { ctx.error('missing operand'); return 1; }
+      var e = fs[normPath(p.operands[0])];
+      if (e && e.linkTo) { ctx.println(e.linkTo); return 0; }
+      if (p.flags.f && e) { ctx.println(normPath(p.operands[0])); return 0; }
+      return 1;
+    },
+    file: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var path = normPath(ctx.args[i]);
+        var e = fs[path];
+        if (!e) { ctx.println(ctx.args[i] + ': cannot open (No such file or directory)'); code = 1; continue; }
+        var desc;
+        if (e.type === 'dir') desc = 'directory';
+        else if (e.linkTo) desc = 'symbolic link to ' + e.linkTo;
+        else if (e.dev) desc = 'character special';
+        else if (e.executable && (e.xapp || path === '/bin/busybox')) desc = 'ELF 64-bit LSB executable, x86-64, statically linked, stripped';
+        else if (e.executable) desc = (e.content || '').slice(0, 2) === '#!' ? 'a script executable' : 'executable, ASCII text';
+        else if (!(e.content || '').length) desc = 'empty';
+        else desc = 'ASCII text';
+        ctx.println(ctx.args[i] + ': ' + desc);
+      }
+      return code;
+    },
+    basename: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      var b = baseName(ctx.args[0].replace(/\/+$/, '') || '/');
+      if (ctx.args[1] && b.slice(-ctx.args[1].length) === ctx.args[1] && b !== ctx.args[1]) b = b.slice(0, -ctx.args[1].length);
+      ctx.println(b);
+      return 0;
+    },
+    dirname: function(ctx) {
+      if (!ctx.args.length) { ctx.error('missing operand'); return 1; }
+      var s = ctx.args[0].replace(/\/+$/, '');
+      var i = s.lastIndexOf('/');
+      ctx.println(i < 0 ? '.' : (i === 0 ? '/' : s.slice(0, i)));
+      return 0;
+    },
+    pwd: function(ctx) { ctx.println(cwd); return 0; },
+    sync: function() { persistFS(); return 0; }
+  });
+  function modeOctal(e) {
+    var m = e.mode || '-rw-r--r--';
+    var v = '';
+    for (var c = 0; c < 3; c++) {
+      var n = 0;
+      if (m.charAt(1 + c * 3) !== '-') n += 4;
+      if (m.charAt(2 + c * 3) !== '-') n += 2;
+      if (m.charAt(3 + c * 3) !== '-') n += 1;
+      v += n;
+    }
+    return '0' + v;
+  }
+
+  // ── Applets: text processing ─────────────────────────────────────────────
+  function gatherInput(ctx, operands) {
+    var files = operands && operands.length ? operands : ['-'];
+    var text = '', code = 0;
+    for (var i = 0; i < files.length; i++) {
+      if (files[i] === '-') { text += ctx.stdin; continue; }
+      var r = readFile(normPath(files[i]));
+      if (r.error) { ctx.error(files[i] + ': ' + r.error); code = 1; continue; }
+      text += r.content;
+    }
+    return { text: text, code: code };
+  }
+  function toLines(text) {
+    var l = String(text).split('\n');
+    if (l.length && l[l.length - 1] === '') l.pop();
+    return l;
+  }
+  function unescapeC(s) {
+    return s.replace(/\\([nrtvfab\\e0])/g, function(_, c) {
+      return { n: '\n', r: '\r', t: '\t', v: '\v', f: '\f', a: '\x07', b: '\b', e: '\x1b', '0': '\0', '\\': '\\' }[c];
+    });
+  }
+
+  defineApplets({
+    echo: function(ctx) {
+      var i = 0, nl = true, esc = false;
+      while (i < ctx.args.length && /^-[neE]+$/.test(ctx.args[i])) {
+        if (ctx.args[i].indexOf('n') >= 0) nl = false;
+        if (ctx.args[i].indexOf('e') >= 0) esc = true;
+        if (ctx.args[i].indexOf('E') >= 0) esc = false;
+        i++;
+      }
+      var s = ctx.args.slice(i).join(' ');
+      if (esc) s = unescapeC(s);
+      ctx.out(s + (nl ? '\n' : ''));
+      return 0;
+    },
+    printf: function(ctx) {
+      if (!ctx.args.length) { ctx.error('usage: printf FORMAT [ARG]...'); return 1; }
+      var fmt = unescapeC(ctx.args[0]);
+      var args = ctx.args.slice(1), ai = 0;
+      var out = fmt.replace(/%[-0-9.]*[sdixXoc%]/g, function(spec) {
+        if (spec === '%%') return '%';
+        var a = ai < args.length ? args[ai++] : '';
+        var kind = spec.charAt(spec.length - 1);
+        if (kind === 's' || kind === 'c') return kind === 'c' ? String(a).charAt(0) : String(a);
+        var n = parseInt(a, 10) || 0;
+        if (kind === 'x') return n.toString(16);
+        if (kind === 'X') return n.toString(16).toUpperCase();
+        if (kind === 'o') return n.toString(8);
+        return String(n);
+      });
+      ctx.out(out);
+      return 0;
+    },
+    grep: function(ctx) {
+      var flags = {}, pattern = null, files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a.charAt(0) === '-' && a.length > 1 && pattern === null && a !== '-') {
+          for (var j = 1; j < a.length; j++) flags[a.charAt(j)] = true;
+        } else if (pattern === null) pattern = a;
+        else files.push(a);
+      }
+      if (pattern === null) { ctx.err('grep: missing pattern'); return 2; }
+      var re;
+      try { re = new RegExp(flags.F ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern, flags.i ? 'i' : ''); }
+      catch (e) { ctx.err('grep: bad regex'); return 2; }
+      var srcs = files.length ? files : ['-'];
+      var matched = 0, code = 0;
+      for (var s = 0; s < srcs.length; s++) {
+        var text, label = srcs[s];
+        if (srcs[s] === '-') text = ctx.stdin;
+        else {
+          var r = readFile(normPath(srcs[s]));
+          if (r.error) { ctx.err('grep: ' + srcs[s] + ': ' + r.error); code = 2; continue; }
+          text = r.content;
+        }
+        var lines = toLines(text), count = 0;
+        for (var ln = 0; ln < lines.length; ln++) {
+          var hit = re.test(lines[ln]);
+          if (hit !== !!flags.v) {
+            matched++; count++;
+            if (flags.q) return 0;
+            if (!flags.c && !flags.l) {
+              var outLine = lines[ln];
+              if (ctx.tty && !flags.v) outLine = outLine.replace(new RegExp(re.source, re.flags + 'g'), function(m0) { return m0 ? '\x1b[1;31m' + m0 + '\x1b[0m' : m0; });
+              ctx.println((srcs.length > 1 ? label + ':' : '') + (flags.n ? (ln + 1) + ':' : '') + outLine);
+            }
+          }
+        }
+        if (flags.c) ctx.println((srcs.length > 1 ? label + ':' : '') + count);
+        if (flags.l && count) ctx.println(label);
+      }
+      if (code) return code;
+      return matched ? 0 : 1;
+    },
+    sed: function(ctx) {
+      var quiet = false, scripts = [], files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-n') quiet = true;
+        else if (a === '-e') scripts.push(ctx.args[++i]);
+        else if (a.charAt(0) === '-' && a.length > 1) { ctx.error('unsupported option ' + a); return 1; }
+        else if (!scripts.length) scripts.push(a);
+        else files.push(a);
+      }
+      if (!scripts.length) { ctx.error('missing script'); return 1; }
+      var cmds = [];
+      for (var s = 0; s < scripts.length; s++) {
+        var sc = scripts[s];
+        var m = /^(\d+)?s(.)((?:\\.|[^\\])*?)\2((?:\\.|[^\\])*?)\2([gip]*)$/.exec(sc);
+        if (m) {
+          var reFlags = (m[5].indexOf('g') >= 0 ? 'g' : '') + (m[5].indexOf('i') >= 0 ? 'i' : '');
+          var re2;
+          try { re2 = new RegExp(m[3], reFlags); } catch (e) { ctx.error('bad regex in substitution'); return 1; }
+          cmds.push({ kind: 's', addr: m[1] ? parseInt(m[1], 10) : null, re: re2, repl: m[4].replace(/\$/g, '$$$$').replace(/&/g, '$$&').replace(/\\(\d)/g, '$$$1'), print: m[5].indexOf('p') >= 0 });
+          continue;
+        }
+        m = /^(\d+|\$)?d$/.exec(sc);
+        if (m) { cmds.push({ kind: 'd', addr: m[1] || null }); continue; }
+        m = /^(\d+|\$)?p$/.exec(sc);
+        if (m) { cmds.push({ kind: 'p', addr: m[1] || null }); continue; }
+        m = /^(\d+)q$/.exec(sc);
+        if (m) { cmds.push({ kind: 'q', addr: parseInt(m[1], 10) }); continue; }
+        ctx.error('unsupported sed command: ' + sc);
+        return 1;
+      }
+      var g = gatherInput(ctx, files);
+      var lines = toLines(g.text);
+      for (var ln = 0; ln < lines.length; ln++) {
+        var line = lines[ln], deleted = false, extraPrint = false;
+        for (var c = 0; c < cmds.length; c++) {
+          var cmd = cmds[c];
+          var addrHit = cmd.addr === null || cmd.addr === undefined ? true :
+            (cmd.addr === '$' ? ln === lines.length - 1 : ln + 1 === Number(cmd.addr));
+          if (!addrHit) continue;
+          if (cmd.kind === 'd') { deleted = true; break; }
+          if (cmd.kind === 'p') extraPrint = true;
+          if (cmd.kind === 's') {
+            var before = line;
+            line = line.replace(cmd.re, cmd.repl);
+            if (cmd.print && line !== before) extraPrint = true;
+          }
+          if (cmd.kind === 'q' && ln + 1 >= cmd.addr) { if (!quiet && !deleted) ctx.println(line); return g.code; }
+        }
+        if (deleted) continue;
+        if (!quiet) ctx.println(line);
+        if (extraPrint) ctx.println(line);
+      }
+      return g.code;
+    },
+    head: function(ctx) {
+      var n = 10, bytes = null, files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-n') n = parseInt(ctx.args[++i], 10);
+        else if (/^-n\d+$/.test(a)) n = parseInt(a.slice(2), 10);
+        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10);
+        else if (a === '-c') bytes = parseInt(ctx.args[++i], 10);
+        else files.push(a);
+      }
+      var g = gatherInput(ctx, files);
+      if (bytes !== null) ctx.out(g.text.slice(0, bytes));
+      else {
+        var lines = toLines(g.text).slice(0, n);
+        if (lines.length) ctx.out(lines.join('\n') + '\n');
+      }
+      return g.code;
+    },
+    tail: function(ctx) {
+      var n = 10, files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-n') n = parseInt(String(ctx.args[++i]).replace('+', ''), 10);
+        else if (/^-n\d+$/.test(a)) n = parseInt(a.slice(2), 10);
+        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10);
+        else if (a === '-f') { /* no live follow in a buffer */ }
+        else files.push(a);
+      }
+      var g = gatherInput(ctx, files);
+      var lines = toLines(g.text).slice(-n);
+      if (lines.length) ctx.out(lines.join('\n') + '\n');
+      return g.code;
+    },
+    wc: function(ctx) {
+      var p = parseFlags(ctx.args, 'lwc');
+      var showAll = !p.flags.l && !p.flags.w && !p.flags.c;
+      var files = p.operands.length ? p.operands : ['-'];
+      var tot = { l: 0, w: 0, c: 0 }, code = 0;
+      function report(t, label) {
+        var l = toLines(t).length;
+        var w = (t.match(/\S+/g) || []).length;
+        var c = t.length;
+        tot.l += l; tot.w += w; tot.c += c;
+        var cols = [];
+        if (showAll || p.flags.l) cols.push(String(l).padStart(7));
+        if (showAll || p.flags.w) cols.push(String(w).padStart(7));
+        if (showAll || p.flags.c) cols.push(String(c).padStart(7));
+        ctx.println(cols.join('') + (label ? ' ' + label : ''));
+      }
+      for (var i = 0; i < files.length; i++) {
+        if (files[i] === '-') { report(ctx.stdin, files.length > 1 ? '-' : ''); continue; }
+        var r = readFile(normPath(files[i]));
+        if (r.error) { ctx.error(files[i] + ': ' + r.error); code = 1; continue; }
+        report(r.content, files[i]);
+      }
+      if (files.length > 1) {
+        var cols = [];
+        if (showAll || p.flags.l) cols.push(String(tot.l).padStart(7));
+        if (showAll || p.flags.w) cols.push(String(tot.w).padStart(7));
+        if (showAll || p.flags.c) cols.push(String(tot.c).padStart(7));
+        ctx.println(cols.join('') + ' total');
+      }
+      return code;
+    },
+    sort: function(ctx) {
+      var p = parseFlags(ctx.args, 'rnu');
+      var g = gatherInput(ctx, p.operands);
+      var lines = toLines(g.text);
+      lines.sort(p.flags.n
+        ? function(a, b) { return (parseFloat(a) || 0) - (parseFloat(b) || 0); }
+        : function(a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+      if (p.flags.r) lines.reverse();
+      if (p.flags.u) lines = lines.filter(function(l, i) { return i === 0 || l !== lines[i - 1]; });
+      if (lines.length) ctx.out(lines.join('\n') + '\n');
+      return g.code;
+    },
+    uniq: function(ctx) {
+      var p = parseFlags(ctx.args, 'cdi');
+      var g = gatherInput(ctx, p.operands);
+      var lines = toLines(g.text);
+      var groups = [];
+      for (var i = 0; i < lines.length; i++) {
+        var prev = groups[groups.length - 1];
+        var same = prev && (p.flags.i ? prev.line.toLowerCase() === lines[i].toLowerCase() : prev.line === lines[i]);
+        if (same) prev.n++;
+        else groups.push({ line: lines[i], n: 1 });
+      }
+      groups.forEach(function(gr) {
+        if (p.flags.d && gr.n < 2) return;
+        ctx.println(p.flags.c ? String(gr.n).padStart(7) + ' ' + gr.line : gr.line);
+      });
+      return g.code;
+    },
+    cut: function(ctx) {
+      var delim = '\t', fields = null, chars = null, files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-d') delim = ctx.args[++i] || '\t';
+        else if (a.slice(0, 2) === '-d') delim = a.slice(2);
+        else if (a === '-f') fields = ctx.args[++i];
+        else if (a.slice(0, 2) === '-f') fields = a.slice(2);
+        else if (a === '-c') chars = ctx.args[++i];
+        else if (a.slice(0, 2) === '-c') chars = a.slice(2);
+        else files.push(a);
+      }
+      if (!fields && !chars) { ctx.error('expected -f or -c'); return 1; }
+      function parseList(spec, max) {
+        var keep = {};
+        spec.split(',').forEach(function(part) {
+          var m = /^(\d*)-(\d*)$/.exec(part);
+          if (m) {
+            var lo = m[1] ? parseInt(m[1], 10) : 1;
+            var hi = m[2] ? parseInt(m[2], 10) : max;
+            for (var k = lo; k <= Math.min(hi, max); k++) keep[k] = true;
+          } else if (/^\d+$/.test(part)) keep[parseInt(part, 10)] = true;
+        });
+        return keep;
+      }
+      var g = gatherInput(ctx, files);
+      toLines(g.text).forEach(function(line) {
+        if (chars) {
+          var keepC = parseList(chars, line.length);
+          var outC = '';
+          for (var c = 1; c <= line.length; c++) if (keepC[c]) outC += line.charAt(c - 1);
+          ctx.println(outC);
+        } else {
+          if (line.indexOf(delim) < 0) { ctx.println(line); return; }
+          var parts = line.split(delim);
+          var keepF = parseList(fields, parts.length);
+          ctx.println(parts.filter(function(_, ix) { return keepF[ix + 1]; }).join(delim));
+        }
+      });
+      return g.code;
+    },
+    tr: function(ctx) {
+      var del = false, sets = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i] === '-d') del = true;
+        else if (ctx.args[i] === '-s') { /* squeeze unsupported, treated as copy */ }
+        else sets.push(ctx.args[i]);
+      }
+      function expandSet(s) {
+        s = unescapeC(s)
+          .replace(/\[:upper:\]/g, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+          .replace(/\[:lower:\]/g, 'abcdefghijklmnopqrstuvwxyz')
+          .replace(/\[:digit:\]/g, '0123456789')
+          .replace(/\[:space:\]/g, ' \t\n');
+        var out = '';
+        for (var k = 0; k < s.length; k++) {
+          if (s[k + 1] === '-' && s[k + 2] && s[k + 2] !== '-') {
+            for (var c = s.charCodeAt(k); c <= s.charCodeAt(k + 2); c++) out += String.fromCharCode(c);
+            k += 2;
+          } else out += s[k];
+        }
+        return out;
+      }
+      if (!sets.length) { ctx.error('missing operand'); return 1; }
+      var s1 = expandSet(sets[0]);
+      var s2 = sets[1] !== undefined ? expandSet(sets[1]) : '';
+      var out = '';
+      for (var j = 0; j < ctx.stdin.length; j++) {
+        var ch = ctx.stdin.charAt(j);
+        var ix = s1.indexOf(ch);
+        if (ix < 0) { out += ch; continue; }
+        if (del) continue;
+        out += ix < s2.length ? s2.charAt(ix) : (s2 ? s2.charAt(s2.length - 1) : ch);
+      }
+      ctx.out(out);
+      return 0;
+    },
+    rev: function(ctx) {
+      var g = gatherInput(ctx, ctx.args);
+      toLines(g.text).forEach(function(l) { ctx.println(l.split('').reverse().join('')); });
+      return g.code;
+    },
+    tac: function(ctx) {
+      var g = gatherInput(ctx, ctx.args);
+      var lines = toLines(g.text).reverse();
+      if (lines.length) ctx.out(lines.join('\n') + '\n');
+      return g.code;
+    },
+    nl: function(ctx) {
+      var p = parseFlags(ctx.args, 'b');
+      var g = gatherInput(ctx, p.operands.filter(function(o) { return o !== 'a'; }));
+      var n = 1;
+      toLines(g.text).forEach(function(l) {
+        if (l.trim() === '') ctx.println('');
+        else ctx.println(String(n++).padStart(6) + '\t' + l);
+      });
+      return g.code;
+    },
+    seq: function(ctx) {
+      var a = ctx.args.map(Number);
+      var first = 1, incr = 1, last;
+      if (a.length === 1) last = a[0];
+      else if (a.length === 2) { first = a[0]; last = a[1]; }
+      else if (a.length === 3) { first = a[0]; incr = a[1]; last = a[2]; }
+      else { ctx.error('usage: seq [FIRST [INC]] LAST'); return 1; }
+      if (a.some(isNaN) || incr === 0) { ctx.error('invalid number'); return 1; }
+      var guard = 0;
+      if (incr > 0) for (var v = first; v <= last && guard++ < 100000; v += incr) ctx.println(String(v));
+      else for (var w = first; w >= last && guard++ < 100000; w += incr) ctx.println(String(w));
+      return 0;
+    },
+    xargs: function(ctx) {
+      var cmd = ctx.args.length ? ctx.args.slice() : ['echo'];
+      var tokens = (ctx.stdin.match(/\S+/g) || []);
+      var res = runSimple(cmd.concat(tokens), '', { tty: ctx.tty });
+      ctx.out(res.stdout);
+      if (res.stderr) ctx.err(res.stderr.replace(/\n$/, ''));
+      return res.code;
+    },
+    test: function(ctx) { return evalTest(ctx.args) ? 0 : 1; },
+    '[': function(ctx) {
+      var a = ctx.args.slice();
+      if (a[a.length - 1] !== ']') { ctx.err('sh: [: missing ]'); return 2; }
+      a.pop();
+      return evalTest(a) ? 0 : 1;
+    },
+    base64: function(ctx) {
+      var p = parseFlags(ctx.args, 'dw');
+      var g = gatherInput(ctx, p.operands);
+      try {
+        if (p.flags.d) ctx.out(decodeURIComponent(escape(atob(g.text.replace(/\s+/g, '')))));
+        else {
+          var b = btoa(unescape(encodeURIComponent(g.text)));
+          for (var i = 0; i < b.length; i += 76) ctx.println(b.slice(i, i + 76));
+        }
+      } catch (e) { ctx.error('invalid input'); return 1; }
+      return g.code;
+    },
+    more: function(ctx) {
+      var g = gatherInput(ctx, ctx.args);
+      ctx.out(g.text);
+      return g.code;
+    },
+    less: function(ctx) {
+      var g = gatherInput(ctx, ctx.args);
+      ctx.out(g.text);
+      return g.code;
+    },
+    strings: function(ctx) {
+      var g = gatherInput(ctx, ctx.args);
+      (g.text.match(/[\x20-\x7e]{4,}/g) || []).forEach(function(s) { ctx.println(s); });
+      return g.code;
+    },
+    'true': function() { return 0; },
+    'false': function() { return 1; }
+  });
+
+  function evalTest(a) {
+    if (!a.length) return false;
+    if (a[0] === '!') return !evalTest(a.slice(1));
+    if (a.length === 1) return a[0] !== '';
+    if (a.length === 2) {
+      var path = normPath(a[1]);
+      var e = fs[path];
+      switch (a[0]) {
+        case '-e': return !!e;
+        case '-f': return !!e && e.type === 'file';
+        case '-d': return !!e && e.type === 'dir';
+        case '-s': return !!e && e.type === 'file' && (e.content || '').length > 0;
+        case '-r': return !!e && canRead(path);
+        case '-w': return !!e && canWritePath(path);
+        case '-x': return !!e && (e.type === 'dir' || !!e.executable);
+        case '-z': return a[1] === '';
+        case '-n': return a[1] !== '';
+        default: return false;
+      }
+    }
+    if (a.length === 3) {
+      var x = a[0], op = a[1], y = a[2];
+      switch (op) {
+        case '=': case '==': return x === y;
+        case '!=': return x !== y;
+        case '-eq': return parseInt(x, 10) === parseInt(y, 10);
+        case '-ne': return parseInt(x, 10) !== parseInt(y, 10);
+        case '-gt': return parseInt(x, 10) > parseInt(y, 10);
+        case '-ge': return parseInt(x, 10) >= parseInt(y, 10);
+        case '-lt': return parseInt(x, 10) < parseInt(y, 10);
+        case '-le': return parseInt(x, 10) <= parseInt(y, 10);
+        default: return false;
+      }
+    }
+    return false;
+  }
+
+  // ── Applets: system & misc ───────────────────────────────────────────────
+  function clearTerminal() {
+    var lines = terminal.querySelectorAll('.line');
+    for (var i = 0; i < lines.length; i++) lines[i].remove();
+  }
+
+  var MAN_PAGES = {
+    sl: [
+      'SL(1)                     General Commands Manual                    SL(1)', '',
+      'NAME', '       sl - cure your bad habit of mistyping', '',
+      'SYNOPSIS', '       sl [-alFc]', '',
+      'DESCRIPTION',
+      '       sl is a highly advanced animation program for curing your bad habit',
+      '       of mistyping.', '',
+      '       -a     An accident is occurring. People cry for help.', '',
+      '       -l     Little version.', '',
+      '       -F     It flies like the galaxy express 999.', '',
+      '       -c     C51 appears instead of D51.', '',
+      'SEE ALSO', '       ls(1)', '',
+      'BUGS', '       It sometimes lists directory contents.', '',
+      'AUTHOR', '       Toyoda Masashi (mtoyoda@acm.org)', '',
+      '                            March 31, 2014                            SL(1)'
+    ],
+    deerhunt: [
+      'DEERHUNT(6)                    Games Manual                    DEERHUNT(6)', '',
+      'NAME', '       deerhunt - deer hunting simulator for X11', '',
+      'SYNOPSIS', '       deerhunt [&]', '',
+      'DESCRIPTION',
+      '       A real-time 3D hunting simulator. The position of the sun, the',
+      '       season and the length of the day follow the system clock, and',
+      '       the weather rolls in on its own: fog, rain, thunderstorms, and',
+      '       snow when it is cold enough.', '',
+      '       Deer, moose, bear, wolf, fox, hare, squirrel and grouse roam',
+      '       the valley. Wounded bears charge. Deep water means swimming,',
+      '       and a swimming hunter cannot shoot.', '',
+      'CONTROLS',
+      '       mouse        look around',
+      '       w a s d      walk (or swim)',
+      '       left btn, f  fire',
+      '       right btn, q look through the scope (q toggles)',
+      '       arrows       fine aim',
+      '       space        hold breath (steadies the scope)',
+      '       1 2 3        choose rifle',
+      '       r            reload',
+      '       m            sound on/off', '',
+      'NOTES',
+      '       Most animals are active at dawn and dusk. Compensate for wind',
+      '       and bullet drop at long range; a steady breath helps.', '',
+      'CREDITS',
+      '       Wildlife and nature models by Quaternius (quaternius.com), CC0,',
+      '       and Poly by Google (bear, squirrel), CC-BY 3.0.', '',
+      'BUGS', '       The animals are procedural and hold no grudge.', '',
+      '                              July 11, 2026                   DEERHUNT(6)'
+    ],
+    vi: [
+      'VI(1)                     General Commands Manual                    VI(1)', '',
+      'NAME', '       vi - edit FILE', '',
+      'SYNOPSIS', '       vi [FILE]', '',
+      'DESCRIPTION',
+      '       BusyBox vi. Saved files persist in your browser (localStorage).', '',
+      '       Normal mode: h j k l arrows, w b, 0 $ ^, gg G, x, dd, dw, yy, p P,',
+      '       r, u, i I a A o O, /pattern, n N, ZZ', '',
+      '       Command mode: :w [FILE], :q, :q!, :wq, :x, :N (go to line N)', '',
+      '                              July 11, 2026                          VI(1)'
+    ]
+  };
+
+  function fmtK(n) { return String(n).padStart(11); }
+
+  defineApplets({
+    busybox: function(ctx) {
+      if (ctx.args[0] === '--list') {
+        Object.keys(applets).sort().forEach(function(n) { ctx.println(n); });
+        return 0;
+      }
+      if (ctx.args.length) {
+        var sub = ctx.args[0];
+        var fn = applets[sub];
+        if (!fn) { ctx.err(sub + ': applet not found'); return 127; }
+        var ctx2 = {
+          args: ctx.args.slice(1), argv0: sub, stdin: ctx.stdin, tty: ctx.tty,
+          out: ctx.out, println: ctx.println, err: ctx.err,
+          error: function(s) { ctx.err(sub + ': ' + s); }
+        };
+        return fn(ctx2) || 0;
+      }
+      ctx.println(bbBanner());
+      ctx.println('BusyBox is copyrighted by many authors between 1998-2024.');
+      ctx.println('Licensed under GPLv2. See source distribution for detailed');
+      ctx.println('copyright notices.');
+      ctx.println('');
+      ctx.println('Usage: busybox [function [arguments]...]');
+      ctx.println('   or: busybox --list');
+      ctx.println('   or: function [arguments]...');
+      ctx.println('');
+      ctx.println('\tBusyBox is a multi-call binary that combines many common Unix');
+      ctx.println('\tutilities into a single executable. The shell in this browser');
+      ctx.println("\temulates it; saved files persist in the browser's storage.");
+      ctx.println('');
+      ctx.println('Currently defined functions:');
+      var names = Object.keys(applets).sort();
+      var line = '\t';
+      for (var i = 0; i < names.length; i++) {
+        var piece = names[i] + (i < names.length - 1 ? ', ' : '');
+        if (line.length + piece.length > 72) { ctx.println(line); line = '\t'; }
+        line += piece;
+      }
+      if (line !== '\t') ctx.println(line);
+      return 0;
+    },
+    sh: function(ctx) {
+      if (ctx.args[0] === '-c' && ctx.args.length > 1) {
+        runCommandLine(ctx.args.slice(1).join(' '));
+        return lastExit;
+      }
+      if (ctx.args.length && ctx.args[0].charAt(0) !== '-') {
+        var r = readFile(normPath(ctx.args[0]));
+        if (r.error) { ctx.err('sh: ' + ctx.args[0] + ': ' + r.error); return 127; }
+        runScript(r.content);
+        return lastExit;
+      }
+      ctx.println(bbBanner());
+      ctx.println("Enter 'help' for a list of built-in commands.");
+      return 0;
+    },
+    ash: function(ctx) { return applets.sh(ctx); },
+    uname: function(ctx) {
+      var p = parseFlags(ctx.args, 'asnrvmop');
+      var f = p.flags;
+      var vals = {
+        s: 'Linux', n: 'securit', r: '6.1.0-37-amd64',
+        v: '#1 SMP PREEMPT_DYNAMIC Debian 6.1.140-1 (2025-05-22)',
+        m: 'x86_64', p: 'unknown', o: 'GNU/Linux'
+      };
+      var order = ['s', 'n', 'r', 'v', 'm', 'p', 'o'];
+      var picked = f.a ? ['s', 'n', 'r', 'v', 'm', 'o'] : order.filter(function(k) { return f[k]; });
+      if (!picked.length) picked = ['s'];
+      ctx.println(picked.map(function(k) { return vals[k]; }).join(' '));
+      return 0;
+    },
+    hostname: function(ctx) { ctx.println(env.HOSTNAME); return 0; },
+    whoami: function(ctx) { ctx.println(env.USER); return 0; },
+    logname: function(ctx) { ctx.println(env.USER); return 0; },
+    groups: function(ctx) { ctx.println('guest'); return 0; },
+    id: function(ctx) { ctx.println('uid=1000(guest) gid=1000(guest) groups=1000(guest)'); return 0; },
+    tty: function(ctx) { ctx.println(ctx.tty ? '/dev/pts/0' : 'not a tty'); return ctx.tty ? 0 : 1; },
+    nproc: function(ctx) { ctx.println(String(navigator.hardwareConcurrency || 2)); return 0; },
+    arch: function(ctx) { ctx.println('x86_64'); return 0; },
+    env: function(ctx) {
+      var i = 0;
+      while (i < ctx.args.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ctx.args[i])) {
+        var a = ctx.args[i], eq = a.indexOf('=');
+        env[a.slice(0, eq)] = a.slice(eq + 1);
+        i++;
+      }
+      if (i < ctx.args.length) {
+        var res = runSimple(ctx.args.slice(i), ctx.stdin, { tty: ctx.tty });
+        ctx.out(res.stdout);
+        if (res.stderr) ctx.err(res.stderr.replace(/\n$/, ''));
+        return res.code;
+      }
+      Object.keys(env).forEach(function(k) { ctx.println(k + '=' + env[k]); });
+      return 0;
+    },
+    printenv: function(ctx) {
+      if (!ctx.args.length) {
+        Object.keys(env).forEach(function(k) { ctx.println(k + '=' + env[k]); });
+        return 0;
+      }
+      var code = 0;
+      ctx.args.forEach(function(k) {
+        if (env[k] !== undefined) ctx.println(env[k]);
+        else code = 1;
+      });
+      return code;
+    },
+    date: function(ctx) {
+      var fmt = null;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a.charAt(0) === '+') fmt = a.slice(1);
+        else if (a === '-u' || a === '-R') { /* close enough */ }
+        else { ctx.error("invalid date '" + a + "'"); return 1; }
+      }
+      var d = new Date();
+      if (!fmt) { ctx.println(formatDate(d)); return 0; }
+      var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      var MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      var out = fmt.replace(/%([YymdeHMSsaAbBjn%])/g, function(_, c) {
+        switch (c) {
+          case 'Y': return String(d.getFullYear());
+          case 'y': return String(d.getFullYear() % 100).padStart(2, '0');
+          case 'm': return String(d.getMonth() + 1).padStart(2, '0');
+          case 'd': return String(d.getDate()).padStart(2, '0');
+          case 'e': return String(d.getDate()).padStart(2, ' ');
+          case 'H': return String(d.getHours()).padStart(2, '0');
+          case 'M': return String(d.getMinutes()).padStart(2, '0');
+          case 'S': return String(d.getSeconds()).padStart(2, '0');
+          case 's': return String(Math.floor(d.getTime() / 1000));
+          case 'a': return DAYS[d.getDay()].slice(0, 3);
+          case 'A': return DAYS[d.getDay()];
+          case 'b': return MONTHS[d.getMonth()];
+          case 'B': return MONTHS_FULL[d.getMonth()];
+          case 'j': return String(Math.ceil((d - new Date(d.getFullYear(), 0, 0)) / 86400000)).padStart(3, '0');
+          case 'n': return '\n';
+          default: return '%';
+        }
+      });
+      ctx.println(out);
+      return 0;
+    },
+    cal: function(ctx) {
+      var d = new Date();
+      var year = d.getFullYear(), month = d.getMonth();
+      if (ctx.args.length >= 2) {
+        month = parseInt(ctx.args[0], 10) - 1;
+        year = parseInt(ctx.args[1], 10);
+        if (isNaN(month) || isNaN(year) || month < 0 || month > 11) { ctx.error('invalid date'); return 1; }
+      }
+      var MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      var head = MONTHS_FULL[month] + ' ' + year;
+      var pad = Math.floor((20 - head.length) / 2);
+      ctx.println(' '.repeat(Math.max(0, pad)) + head);
+      ctx.println('Su Mo Tu We Th Fr Sa');
+      var first = new Date(year, month, 1).getDay();
+      var days = new Date(year, month + 1, 0).getDate();
+      var today = (year === d.getFullYear() && month === d.getMonth()) ? d.getDate() : -1;
+      var line = '   '.repeat(first).slice(0, first * 3);
+      for (var day = 1; day <= days; day++) {
+        var cell = String(day).padStart(2, ' ');
+        if (day === today && ctx.tty) cell = '\x1b[1;32m' + cell + '\x1b[0m';
+        line += cell + ' ';
+        if ((first + day) % 7 === 0) { ctx.println(line.replace(/\s+$/, '')); line = ''; }
+      }
+      if (line.trim()) ctx.println(line.replace(/\s+$/, ''));
+      return 0;
+    },
+    uptime: function(ctx) {
+      var up = Math.floor((Date.now() - BOOT_TIME) / 1000) + 183042;
+      var days = Math.floor(up / 86400);
+      var hrs = Math.floor((up % 86400) / 3600);
+      var mins = Math.floor((up % 3600) / 60);
+      var t = new Date();
+      ctx.println(' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0') + ':' + String(t.getSeconds()).padStart(2, '0') +
+        ' up ' + days + ' days, ' + String(hrs).padStart(2) + ':' + String(mins).padStart(2, '0') +
+        ',  1 user,  load average: 0.00, 0.01, 0.05');
+      return 0;
+    },
+    free: function(ctx) {
+      ctx.println('              total        used        free      shared  buff/cache   available');
+      ctx.println('Mem:    ' + fmtK(2013452) + fmtK(331898) + fmtK(1524188) + fmtK(1024) + fmtK(157366) + fmtK(1730040));
+      ctx.println('Swap:   ' + fmtK(0) + fmtK(0) + fmtK(0));
+      return 0;
+    },
+    dmesg: function(ctx) {
+      [
+        '[    0.000000] Linux version 6.1.0-37-amd64 (builder@securit) #1 SMP PREEMPT_DYNAMIC',
+        '[    0.001204] Command line: BOOT_IMAGE=/boot/vmlinuz root=/dev/vda1 ro quiet',
+        '[    0.142551] Memory: 2013452K/2097152K available',
+        '[    0.401180] virtio_blk virtio1: [vda] 10485760 512-byte logical blocks (5.37 GB/5.00 GiB)',
+        '[    0.622013] EXT4-fs (vda1): mounted filesystem with ordered data mode. Quota mode: none.',
+        '[    1.093392] random: crng init done',
+        '[    1.244819] eth0: link up, 1000 Mbps, full duplex',
+        '[    2.001240] browserfs: localStorage overlay mounted on /home (persistent)',
+        '[    4.192011] deerhunt: wildlife subsystem initialized, 3 rifles registered',
+        '[    6.017743] sshd[204]: listening on 0.0.0.0 port 22'
+      ].forEach(function(l) { ctx.println(l); });
+      return 0;
+    },
+    mount: function(ctx) {
+      ctx.println('/dev/vda1 on / type ext4 (rw,relatime)');
+      ctx.println('proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)');
+      ctx.println('devtmpfs on /dev type devtmpfs (rw,nosuid,noexec,relatime)');
+      ctx.println('tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev)');
+      ctx.println('localStorage on /home type browserfs (rw,relatime,persistent)');
+      return 0;
+    },
+    which: function(ctx) {
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var nm = ctx.args[i];
+        if (applets[nm]) ctx.println('/bin/' + nm);
+        else {
+          var rx = resolveFromPath(nm);
+          if (rx) ctx.println(rx.path);
+          else code = 1;
+        }
+      }
+      return code;
+    },
+    clear: function(ctx) {
+      if (ctx.tty) clearTerminal();
+      return 0;
+    },
+    reset: function(ctx) {
+      if (ctx.tty) clearTerminal();
+      return 0;
+    },
+    ps: function(ctx) {
       var now = new Date();
-      addLine('USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND');
+      ctx.println('USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND');
       for (var i = 0; i < bootProcs.length; i++) {
         var bp = bootProcs[i];
-        addLine(bp.user.padEnd(8) + ' ' + bp.pid.toString().padStart(4) + '  ' + bp.cpu + '  ' + bp.mem + ' ' + bp.vsz.toString().padStart(6) + ' ' + bp.rss.toString().padStart(5) + ' ' + bp.tty.padEnd(8) + ' ' + bp.stat.padEnd(4) + ' ' + formatPsTime(now) + '   0:00 ' + bp.command);
+        ctx.println(bp.user.padEnd(8) + ' ' + bp.pid.toString().padStart(4) + '  ' + bp.cpu + '  ' + bp.mem + ' ' + bp.vsz.toString().padStart(6) + ' ' + bp.rss.toString().padStart(5) + ' ' + bp.tty.padEnd(8) + ' ' + bp.stat.padEnd(4) + ' ' + formatPsTime(now) + '   0:00 ' + bp.command);
       }
-      addLine('guest    ' + bashPid.toString().padStart(4) + '  0.0  0.1  22456  5432 pts/0    Ss   ' + formatPsTime(now) + '   0:00 -bash');
+      ctx.println('guest    ' + shellPid.toString().padStart(4) + '  0.0  0.1  22456  5432 pts/0    Ss   ' + formatPsTime(now) + '   0:00 -sh');
       var pids = Object.keys(processes);
       for (var j = 0; j < pids.length; j++) {
         var proc = processes[pids[j]];
         var stat = (foregroundPid === proc.pid) ? 'S+  ' : 'S   ';
-        addLine('guest   ' + proc.pid.toString().padStart(5) + '  0.2  0.3  45200  8192 pts/0    ' + stat + formatPsTime(proc.startTime) + '   0:00 ' + proc.command);
+        ctx.println('guest   ' + proc.pid.toString().padStart(5) + '  0.2  0.3  45200  8192 pts/0    ' + stat + formatPsTime(proc.startTime) + '   0:00 ' + proc.command);
       }
-      addLine('guest   ' + nextPid.toString().padStart(5) + '  0.0  0.0  15320  2048 pts/0    R+   ' + formatPsTime(now) + '   0:00 ps ' + (args.join(' ') || 'aux'));
+      ctx.println('guest   ' + nextPid.toString().padStart(5) + '  0.0  0.0  15320  2048 pts/0    R+   ' + formatPsTime(now) + '   0:00 ps ' + (ctx.args.join(' ') || 'aux'));
+      return 0;
     },
-    kill: function(args) {
-      if (!args.length) { addLine('kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]'); return; }
-      for (var i = 0; i < args.length; i++) {
-        if (args[i].startsWith('-')) continue;
-        var pid = parseInt(args[i]);
-        if (isNaN(pid)) { addLine('-bash: kill: ' + args[i] + ': arguments must be process or job IDs'); continue; }
-        if (pid === bashPid || bootProcs.some(function(bp) { return bp.pid === pid; })) {
-          addLine('-bash: kill: (' + pid + ') - Operation not permitted');
+    kill: function(ctx) {
+      if (!ctx.args.length) { ctx.err('kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ...'); return 1; }
+      var code = 0;
+      for (var i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i].charAt(0) === '-') continue;
+        var pid = parseInt(ctx.args[i], 10);
+        if (isNaN(pid)) { ctx.err('sh: kill: ' + ctx.args[i] + ': arguments must be process or job IDs'); code = 1; continue; }
+        if (pid === shellPid || bootProcs.some(function(bp) { return bp.pid === pid; })) {
+          ctx.err('sh: kill: (' + pid + ') - Operation not permitted');
+          code = 1;
           continue;
         }
-        if (!killProcess(pid)) addLine('-bash: kill: (' + pid + ') - No such process');
+        if (!killProcess(pid)) { ctx.err('sh: kill: (' + pid + ') - No such process'); code = 1; }
       }
+      return code;
     },
-    jobs: function() {
+    jobs: function(ctx) {
       var jobIds = Object.keys(jobs);
       for (var i = 0; i < jobIds.length; i++) {
         var job = jobs[jobIds[i]];
         var status = job.status === 'running' ? 'Running' : 'Done';
-        addLine('[' + job.jobId + ']+  ' + status + '                 ' + job.command + (job.status === 'running' ? ' &' : ''));
+        ctx.println('[' + job.jobId + ']+  ' + status + '                 ' + job.command + (job.status === 'running' ? ' &' : ''));
       }
+      return 0;
     },
-    man: function(args) {
-      if (!args.length) { addLine('What manual page do you want?'); return; }
-      var page = args[0];
-      if (page === 'sl') {
-        addLine('SL(1)                     General Commands Manual                    SL(1)');
-        addLine('');
-        addLine('NAME');
-        addLine('       sl - cure your bad habit of mistyping');
-        addLine('');
-        addLine('SYNOPSIS');
-        addLine('       sl [-alFc]');
-        addLine('');
-        addLine('DESCRIPTION');
-        addLine('       sl is a highly advanced animation program for curing your bad habit');
-        addLine('       of mistyping.');
-        addLine('');
-        addLine('       -a     An accident is occurring. People cry for help.');
-        addLine('');
-        addLine('       -l     Little version.');
-        addLine('');
-        addLine('       -F     It flies like the galaxy express 999.');
-        addLine('');
-        addLine('       -c     C51 appears instead of D51.');
-        addLine('');
-        addLine('SEE ALSO');
-        addLine('       ls(1)');
-        addLine('');
-        addLine('BUGS');
-        addLine('       It sometimes lists directory contents.');
-        addLine('');
-        addLine('AUTHOR');
-        addLine('       Toyoda Masashi (mtoyoda@acm.org)');
-        addLine('');
-        addLine('                            March 31, 2014                            SL(1)');
-      } else if (page === 'deerhunt') {
-        addLine('DEERHUNT(6)                    Games Manual                    DEERHUNT(6)');
-        addLine('');
-        addLine('NAME');
-        addLine('       deerhunt - deer hunting simulator for X11');
-        addLine('');
-        addLine('SYNOPSIS');
-        addLine('       deerhunt [&]');
-        addLine('');
-        addLine('DESCRIPTION');
-        addLine('       A real-time 3D hunting simulator. The position of the sun, the');
-        addLine('       season and the length of the day follow the system clock, and');
-        addLine('       the weather rolls in on its own: fog, rain, thunderstorms, and');
-        addLine('       snow when it is cold enough.');
-        addLine('');
-        addLine('CONTROLS');
-        addLine('       mouse        look around');
-        addLine('       w a s d      walk');
-        addLine('       left btn, f  fire');
-        addLine('       right btn, q look through the scope (q toggles)');
-        addLine('       arrows       fine aim');
-        addLine('       space        hold breath (steadies the scope)');
-        addLine('       1 2 3        choose rifle');
-        addLine('       r            reload');
-        addLine('       m            sound on/off');
-        addLine('');
-        addLine('NOTES');
-        addLine('       Deer are most active at dawn and dusk. Compensate for wind and');
-        addLine('       bullet drop at long range; a steady breath helps.');
-        addLine('');
-        addLine('CREDITS');
-        addLine('       Wildlife and nature models by Quaternius (quaternius.com), CC0.');
-        addLine('');
-        addLine('BUGS');
-        addLine('       The deer are procedural and hold no grudge.');
-        addLine('');
-        addLine('                              July 11, 2026                   DEERHUNT(6)');
-      } else {
-        addLine('No manual entry for ' + page);
-      }
+    man: function(ctx) {
+      if (!ctx.args.length) { ctx.println('What manual page do you want?'); return 1; }
+      var page = MAN_PAGES[ctx.args[0]];
+      if (!page) { ctx.println('No manual entry for ' + ctx.args[0]); return 1; }
+      page.forEach(function(l) { ctx.println(l); });
+      return 0;
     },
-    sudo: function() { addLine('[sudo] password for guest: '); addLine('guest is not in the sudoers file. This incident will be reported.'); },
-    su: function() { addLine('Password: '); addLine('su: Authentication failure'); },
-    sl: function(args) { runSL(args); }
-  };
+    sudo: function(ctx) {
+      ctx.println('[sudo] password for guest: ');
+      ctx.println('guest is not in the sudoers file. This incident will be reported.');
+      return 1;
+    },
+    su: function(ctx) {
+      ctx.println('Password: ');
+      ctx.println('su: Authentication failure');
+      return 1;
+    },
+    md5sum: function(ctx) { ctx.error('not available on this system (no crypto in the disk driver)'); return 1; },
+    sl: function(ctx) { ctx.err('sl: redirected? trains only run on terminals'); return 1; },
+    sleep: function(ctx) {
+      if (!ctx.args.length || isNaN(parseFloat(ctx.args[0]))) { ctx.error("invalid number '" + (ctx.args[0] || '') + "'"); return 1; }
+      return 0;
+    },
+    yes: function(ctx) {
+      var word = ctx.args.length ? ctx.args.join(' ') : 'y';
+      for (var i = 0; i < 4096; i++) ctx.println(word);
+      return 0;
+    },
+    vi: function(ctx) {
+      ctx.err('vi: standard input is not a terminal');
+      return 1;
+    },
+    poweroff: function(ctx) { ctx.error('must be root (and this is a web page)'); return 1; },
+    reboot: function(ctx) { ctx.error('must be root — try reloading the page instead'); return 1; },
+    'true': function() { return 0; },
+    'false': function() { return 1; }
+  });
 
-  var denied = ['rm', 'mv', 'cp', 'mkdir', 'touch', 'chmod', 'chown', 'chgrp', 'dd', 'mkfs', 'mount', 'umount'];
+  // ── Interactive launchers (standalone commands at the tty) ───────────────
+  function runInteractive(name, args, cont) {
+    if (name === 'sl') {
+      var proc = runSL(args);
+      if (proc) proc.onExit = function() { lastExit = 0; if (cont) cont(); };
+      return 'async';
+    }
+    if (name === 'vi') return launchVi(args, cont);
+    if (name === 'sleep') return runSleep(args, cont);
+    if (name === 'yes') return runYes(args, cont);
+  }
+
+  function runSleep(args, cont) {
+    var secs = parseFloat(args[0]);
+    if (isNaN(secs) || secs < 0) {
+      addLine("sleep: invalid number '" + (args[0] || '') + "'");
+      lastExit = 1;
+      return;
+    }
+    var pid = nextPid++;
+    var proc = { pid: pid, command: 'sleep ' + args.join(' '), startTime: new Date(), status: 'running', jobId: null };
+    processes[pid] = proc;
+    foregroundPid = pid;
+    disableTerminalInput();
+    var timer = setTimeout(function() { finish(false); }, Math.min(secs, 86400) * 1000);
+    function keyHandler(e) {
+      if (e.key === 'c' && e.ctrlKey) { e.preventDefault(); finish(true); }
+    }
+    function finish(interrupted) {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', keyHandler);
+      delete processes[pid];
+      if (foregroundPid === pid) foregroundPid = null;
+      if (interrupted) addLine('^C');
+      lastExit = interrupted ? 130 : 0;
+      enableTerminalInput();
+      updatePrompt();
+      scrollToBottom();
+      if (!interrupted && cont) cont();
+    }
+    document.addEventListener('keydown', keyHandler);
+    return 'async';
+  }
+
+  function runYes(args, cont) {
+    var word = args.length ? args.join(' ') : 'y';
+    var pid = nextPid++;
+    var proc = { pid: pid, command: 'yes' + (args.length ? ' ' + args.join(' ') : ''), startTime: new Date(), status: 'running', jobId: null, intervalId: null };
+    processes[pid] = proc;
+    foregroundPid = pid;
+    disableTerminalInput();
+    proc.intervalId = setInterval(function() {
+      for (var i = 0; i < 32; i++) addLine(word);
+      var lines = terminal.querySelectorAll('.line');
+      for (var j = 0; j < lines.length - 2000; j++) lines[j].remove();
+      scrollToBottom();
+    }, 60);
+    function keyHandler(e) {
+      if (e.key === 'c' && e.ctrlKey) {
+        e.preventDefault();
+        clearInterval(proc.intervalId);
+        document.removeEventListener('keydown', keyHandler);
+        delete processes[pid];
+        if (foregroundPid === pid) foregroundPid = null;
+        addLine('^C');
+        lastExit = 130;
+        enableTerminalInput();
+        updatePrompt();
+        scrollToBottom();
+      }
+    }
+    document.addEventListener('keydown', keyHandler);
+    return 'async';
+  }
+
+  // ── vi (BusyBox-style modal editor; :w persists to browser storage) ─────
+  function launchVi(args, cont) {
+    var fileArg = null;
+    for (var ai = 0; ai < args.length; ai++) {
+      if (args[ai].charAt(0) !== '-') { fileArg = args[ai]; break; }
+    }
+    var path = fileArg ? normPath(fileArg) : null;
+    var buf = [''];
+    var newFile = true;
+    if (path && fs[path]) {
+      if (fs[path].type === 'dir') { addLine('vi: ' + fileArg + ': Is a directory'); lastExit = 1; return; }
+      var r0 = readFile(path);
+      if (r0.error) { addLine('vi: ' + fileArg + ': ' + r0.error); lastExit = 1; return; }
+      buf = r0.content.split('\n');
+      if (buf.length > 1 && buf[buf.length - 1] === '') buf.pop();
+      if (!buf.length) buf = [''];
+      newFile = false;
+    }
+
+    // Screen metrics (same probe trick as sl)
+    var probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-family:"Cascadia Code","Fira Code","JetBrains Mono",Consolas,Monaco,monospace;font-size:14px;line-height:1.4';
+    probe.textContent = 'MMMMMMMMMM';
+    document.body.appendChild(probe);
+    var cw = probe.offsetWidth / 10 || 8.4;
+    var ch = probe.offsetHeight || 20;
+    document.body.removeChild(probe);
+    var COLS = Math.max(40, Math.floor((window.innerWidth - 16) / cw));
+    var ROWS = Math.max(10, Math.floor((window.innerHeight - 16) / ch)) - 1;   // last row = status
+
+    var vOverlay = document.createElement('div');
+    vOverlay.id = 'vi-overlay';
+    var pre = document.createElement('pre');
+    pre.id = 'vi-pre';
+    vOverlay.appendChild(pre);
+    document.body.appendChild(vOverlay);
+
+    var pid = nextPid++;
+    var proc = { pid: pid, command: 'vi' + (args.length ? ' ' + args.join(' ') : ''), startTime: new Date(), status: 'running', windowEl: vOverlay, jobId: null };
+    processes[pid] = proc;
+    foregroundPid = pid;
+    disableTerminalInput();
+
+    var mode = 'normal';       // normal | insert | cmd
+    var cy = 0, cx = 0, top = 0;
+    var pending = '';          // g, d, y, r, Z prefixes
+    var cmdline = '';          // after : or /
+    var cmdKind = ':';
+    var message = fileArg
+      ? '"' + fileArg + '"' + (newFile ? ' [New file]' : ' ' + buf.length + 'L, ' + (buf.join('\n').length + 1) + 'C')
+      : '';
+    var modified = false;
+    var yankBuf = null;        // {lines: [...]}
+    var undoStack = [];
+    var lastSearch = null;
+
+    function pushUndo() {
+      undoStack.push({ buf: buf.slice(), cy: cy, cx: cx });
+      if (undoStack.length > 100) undoStack.shift();
+    }
+    function snapshot() {
+      pushUndo();
+      modified = true;
+    }
+    function clampCursor(insertMode) {
+      if (cy < 0) cy = 0;
+      if (cy > buf.length - 1) cy = buf.length - 1;
+      var max = Math.max(0, buf[cy].length - (insertMode ? 0 : 1));
+      if (cx > max) cx = max;
+      if (cx < 0) cx = 0;
+    }
+    function render() {
+      if (cy < top) top = cy;
+      if (cy >= top + ROWS) top = cy - ROWS + 1;
+      pre.textContent = '';
+      for (var row = 0; row < ROWS; row++) {
+        var li = top + row;
+        if (li < buf.length) {
+          var line = buf[li].slice(0, COLS);
+          if (li === cy && mode !== 'cmd') {
+            var cxs = Math.min(cx, Math.max(0, line.length));
+            pre.appendChild(document.createTextNode(line.slice(0, cxs)));
+            var cur = document.createElement('span');
+            cur.className = 'vi-inv';
+            cur.textContent = line.charAt(cxs) || ' ';
+            pre.appendChild(cur);
+            pre.appendChild(document.createTextNode(line.slice(cxs + 1) + '\n'));
+          } else {
+            pre.appendChild(document.createTextNode(line + '\n'));
+          }
+        } else {
+          var tilde = document.createElement('span');
+          tilde.className = 'vi-tilde';
+          tilde.textContent = '~';
+          pre.appendChild(tilde);
+          pre.appendChild(document.createTextNode('\n'));
+        }
+      }
+      // status line
+      if (mode === 'cmd') {
+        pre.appendChild(document.createTextNode(cmdKind + cmdline));
+        var cur2 = document.createElement('span');
+        cur2.className = 'vi-inv';
+        cur2.textContent = ' ';
+        pre.appendChild(cur2);
+      } else {
+        var left = message || (mode === 'insert' ? '-- INSERT --' : '');
+        var right = (cy + 1) + ',' + (cx + 1) + '  ' +
+          (buf.length <= ROWS ? 'All' : top === 0 ? 'Top' : top + ROWS >= buf.length ? 'Bot' : Math.floor(top * 100 / (buf.length - ROWS)) + '%');
+        var gap = Math.max(1, COLS - left.length - right.length - 1);
+        pre.appendChild(document.createTextNode(left + ' '.repeat(gap) + right));
+      }
+    }
+    function quit(code) {
+      document.removeEventListener('keydown', keyHandler, true);
+      if (vOverlay.parentNode) vOverlay.parentNode.removeChild(vOverlay);
+      if (processes[pid]) delete processes[pid];
+      if (foregroundPid === pid) foregroundPid = null;
+      lastExit = code;
+      enableTerminalInput();
+      updatePrompt();
+      scrollToBottom();
+      if (cont) cont();
+    }
+    function save(target, thenQuit, force) {
+      var dest = target ? normPath(target) : path;
+      if (!dest) { message = 'No current filename'; return false; }
+      var text = buf.join('\n') + '\n';
+      var w = writeFile(dest, text);
+      if (w.error) { message = "'" + (target || fileArg) + "' " + w.error; return false; }
+      if (w.warn) { message = 'write error: ' + w.warn; return false; }
+      if (!path) { path = dest; fileArg = target; }
+      modified = false;
+      message = "'" + (target || fileArg || dest) + "' " + buf.length + 'L, ' + text.length + 'C';
+      if (thenQuit) quit(0);
+      return true;
+    }
+    function execEx(cmd) {
+      cmd = cmd.trim();
+      if (cmd === '') return;
+      if (/^\d+$/.test(cmd)) { cy = Math.min(buf.length - 1, Math.max(0, parseInt(cmd, 10) - 1)); cx = 0; return; }
+      var m = /^w(q)?(!)?(?:\s+(.+))?$/.exec(cmd);
+      if (m) { save(m[3] || null, !!m[1]); return; }
+      if (cmd === 'x') { if (modified) save(null, true); else quit(0); return; }
+      if (cmd === 'q') {
+        if (modified) { message = 'No write since last change (:q! overrides)'; return; }
+        quit(0);
+        return;
+      }
+      if (cmd === 'q!') { quit(0); return; }
+      if (cmd === 'set nu' || cmd === 'set number' || cmd.slice(0, 4) === 'set ') { message = ''; return; }
+      message = ':' + cmd + ': No such command';
+    }
+    function doSearch(backwards) {
+      if (!lastSearch) { message = 'No previous search'; return; }
+      var re;
+      try { re = new RegExp(lastSearch); } catch (e) { re = new RegExp(lastSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
+      var n = buf.length;
+      for (var step = 1; step <= n; step++) {
+        var li = backwards ? (cy - step + n * 2) % n : (cy + step) % n;
+        var mm = re.exec(buf[li]);
+        if (mm) { cy = li; cx = mm.index; message = ''; return; }
+      }
+      message = 'Pattern not found: ' + lastSearch;
+    }
+    function wordFwd() {
+      var line = buf[cy];
+      var i = cx;
+      while (i < line.length && /\S/.test(line.charAt(i))) i++;
+      while (i < line.length && /\s/.test(line.charAt(i))) i++;
+      if (i >= line.length && cy < buf.length - 1) { cy++; cx = 0; }
+      else cx = i;
+    }
+    function wordBack() {
+      if (cx === 0) {
+        if (cy > 0) { cy--; cx = Math.max(0, buf[cy].length - 1); }
+        return;
+      }
+      var line = buf[cy];
+      var i = cx - 1;
+      while (i > 0 && /\s/.test(line.charAt(i))) i--;
+      while (i > 0 && /\S/.test(line.charAt(i - 1))) i--;
+      cx = i;
+    }
+
+    function keyHandler(e) {
+      if (e.metaKey || (e.ctrlKey && e.key !== 'c')) return;   // keep browser shortcuts
+      var key = e.key;
+      if (key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'CapsLock') return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.ctrlKey && key === 'c') {
+        if (mode === 'insert') { mode = 'normal'; clampCursor(false); }
+        else message = 'Type :q<Enter> to exit vi (or :q! to discard changes)';
+        pending = '';
+        render();
+        return;
+      }
+
+      if (mode === 'cmd') {
+        if (key === 'Enter') {
+          mode = 'normal';
+          var c = cmdline;
+          cmdline = '';
+          if (cmdKind === ':') execEx(c);
+          else if (c !== '') { lastSearch = c; cy0Search(); }
+          else doSearch(false);
+          clampCursor(false);
+        } else if (key === 'Escape') { mode = 'normal'; cmdline = ''; }
+        else if (key === 'Backspace') {
+          if (cmdline === '') mode = 'normal';
+          else cmdline = cmdline.slice(0, -1);
+        } else if (key.length === 1) cmdline += key;
+        render();
+        return;
+      }
+      function cy0Search() { var save = cy; doSearch(false); if (message && message.indexOf('Pattern') === 0) cy = save; }
+
+      if (mode === 'insert') {
+        if (key === 'Escape') { mode = 'normal'; cx = Math.max(0, cx - 1); clampCursor(false); }
+        else if (key === 'Enter') {
+          var lineI = buf[cy];
+          buf.splice(cy, 1, lineI.slice(0, cx), lineI.slice(cx));
+          cy++; cx = 0;
+        } else if (key === 'Backspace') {
+          if (cx > 0) { buf[cy] = buf[cy].slice(0, cx - 1) + buf[cy].slice(cx); cx--; }
+          else if (cy > 0) {
+            cx = buf[cy - 1].length;
+            buf.splice(cy - 1, 2, buf[cy - 1] + buf[cy]);
+            cy--;
+          }
+        } else if (key === 'Tab') { buf[cy] = buf[cy].slice(0, cx) + '\t' + buf[cy].slice(cx); cx++; }
+        else if (key === 'ArrowLeft') { if (cx > 0) cx--; }
+        else if (key === 'ArrowRight') { if (cx < buf[cy].length) cx++; }
+        else if (key === 'ArrowUp') { if (cy > 0) { cy--; clampCursor(true); } }
+        else if (key === 'ArrowDown') { if (cy < buf.length - 1) { cy++; clampCursor(true); } }
+        else if (key.length === 1) {
+          buf[cy] = buf[cy].slice(0, cx) + key + buf[cy].slice(cx);
+          cx++;
+          modified = true;
+        }
+        render();
+        return;
+      }
+
+      // ── normal mode ──
+      message = '';
+      if (pending === 'r') {
+        pending = '';
+        if (key.length === 1 && buf[cy].length) {
+          snapshot();
+          buf[cy] = buf[cy].slice(0, cx) + key + buf[cy].slice(cx + 1);
+        }
+        render();
+        return;
+      }
+      if (pending === 'g') {
+        pending = '';
+        if (key === 'g') { cy = 0; cx = 0; }
+        render();
+        return;
+      }
+      if (pending === 'd') {
+        pending = '';
+        if (key === 'd') {
+          snapshot();
+          yankBuf = { lines: [buf[cy]] };
+          buf.splice(cy, 1);
+          if (!buf.length) buf = [''];
+          clampCursor(false);
+        } else if (key === 'w') {
+          snapshot();
+          var lw = buf[cy], iw = cx;
+          while (iw < lw.length && /\S/.test(lw.charAt(iw))) iw++;
+          while (iw < lw.length && /\s/.test(lw.charAt(iw))) iw++;
+          buf[cy] = lw.slice(0, cx) + lw.slice(iw);
+          clampCursor(false);
+        }
+        render();
+        return;
+      }
+      if (pending === 'y') {
+        pending = '';
+        if (key === 'y') { yankBuf = { lines: [buf[cy]] }; message = '1 line yanked'; }
+        render();
+        return;
+      }
+      if (pending === 'Z') {
+        pending = '';
+        if (key === 'Z') { if (modified) save(null, true); else quit(0); return; }
+        render();
+        return;
+      }
+
+      switch (key) {
+        case 'h': case 'ArrowLeft': if (cx > 0) cx--; break;
+        case 'l': case 'ArrowRight': cx++; clampCursor(false); break;
+        case 'j': case 'ArrowDown': if (cy < buf.length - 1) cy++; clampCursor(false); break;
+        case 'k': case 'ArrowUp': if (cy > 0) cy--; clampCursor(false); break;
+        case '0': case 'Home': cx = 0; break;
+        case '$': case 'End': cx = Math.max(0, buf[cy].length - 1); break;
+        case '^': { var mnb = /\S/.exec(buf[cy]); cx = mnb ? mnb.index : 0; break; }
+        case 'w': wordFwd(); clampCursor(false); break;
+        case 'b': wordBack(); break;
+        case 'G': cy = buf.length - 1; cx = 0; break;
+        case 'g': pending = 'g'; break;
+        case 'x':
+          if (buf[cy].length) {
+            snapshot();
+            buf[cy] = buf[cy].slice(0, cx) + buf[cy].slice(cx + 1);
+            clampCursor(false);
+          }
+          break;
+        case 'd': pending = 'd'; break;
+        case 'y': pending = 'y'; break;
+        case 'r': pending = 'r'; break;
+        case 'Z': pending = 'Z'; break;
+        case 'p':
+          if (yankBuf) {
+            snapshot();
+            for (var yp = 0; yp < yankBuf.lines.length; yp++) buf.splice(cy + 1 + yp, 0, yankBuf.lines[yp]);
+            cy++; cx = 0;
+          }
+          break;
+        case 'P':
+          if (yankBuf) {
+            snapshot();
+            for (var yp2 = 0; yp2 < yankBuf.lines.length; yp2++) buf.splice(cy + yp2, 0, yankBuf.lines[yp2]);
+            cx = 0;
+          }
+          break;
+        case 'u': {
+          var st = undoStack.pop();
+          if (st) { buf = st.buf; cy = st.cy; cx = st.cx; clampCursor(false); message = 'undo'; }
+          else message = 'Already at oldest change';
+          break;
+        }
+        case 'i': pushUndo(); mode = 'insert'; break;
+        case 'I': { var mI = /\S/.exec(buf[cy]); cx = mI ? mI.index : 0; pushUndo(); mode = 'insert'; break; }
+        case 'a': cx = Math.min(buf[cy].length, cx + 1); pushUndo(); mode = 'insert'; break;
+        case 'A': cx = buf[cy].length; pushUndo(); mode = 'insert'; break;
+        case 'o': snapshot(); buf.splice(cy + 1, 0, ''); cy++; cx = 0; mode = 'insert'; break;
+        case 'O': snapshot(); buf.splice(cy, 0, ''); cx = 0; mode = 'insert'; break;
+        case ':': mode = 'cmd'; cmdKind = ':'; cmdline = ''; break;
+        case '/': mode = 'cmd'; cmdKind = '/'; cmdline = ''; break;
+        case 'n': doSearch(false); break;
+        case 'N': doSearch(true); break;
+        case 'PageDown': cy = Math.min(buf.length - 1, cy + ROWS); clampCursor(false); break;
+        case 'PageUp': cy = Math.max(0, cy - ROWS); clampCursor(false); break;
+        default: break;
+      }
+      render();
+    }
+
+    document.addEventListener('keydown', keyHandler, true);
+    render();
+    return 'async';
+  }
 
   function execute(line) {
     var trimmed = line.trim();
     if (!trimmed) return;
     history.push(trimmed);
     historyIndex = history.length;
-
-    // Check for & (background execution)
-    var background = false;
-    if (trimmed.endsWith('&')) {
-      background = true;
-      trimmed = trimmed.slice(0, -1).trim();
-      if (!trimmed) return;
-    }
-
-    var parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-    var cmd = parts[0];
-    var args = parts.slice(1).map(function(a) {
-      if ((a.startsWith('"') && a.endsWith('"')) || (a.startsWith("'") && a.endsWith("'"))) return a.slice(1, -1);
-      return a;
-    });
-    if (commands[cmd]) {
-      commands[cmd](args);
-    } else if (denied.indexOf(cmd) !== -1) {
-      addLine('-bash: ' + cmd + ': Permission denied');
-    } else {
-      var resolved = resolveFromPath(cmd);
-      if (resolved && resolved.entry.xapp) {
-        spawnXApp(cmd, resolved.entry, background);
-      } else {
-        addLine('-bash: ' + cmd + ': command not found');
-      }
-    }
+    persistHistory();
+    runCommandLine(trimmed);
   }
+
+  // Boot the filesystem (base image + persisted overlay from localStorage)
+  bootFS();
 
   // Build input line
   var inputLine = document.createElement('div');
@@ -912,6 +3116,10 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   var now = new Date();
   var loginDate = new Date(now.getTime() - 300000);
   addLine('Last login: ' + formatDate(loginDate) + ' from 192.168.1.42');
+  addLine('');
+  addLine(bbBanner());
+  addLine("Enter 'help' for a list of built-in commands.");
+  addLine('');
 
   function updatePrompt() {
     promptSpan.textContent = '';
@@ -923,18 +3131,18 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   }
 
   function getCompletableCommands() {
-    var names = Object.keys(commands).concat(denied);
-    for (var i = 0; i < PATH.length; i++) {
-      var dir = fs[PATH[i]];
+    var names = Object.keys(builtins).concat(Object.keys(applets));
+    var dirs = pathDirs();
+    for (var i = 0; i < dirs.length; i++) {
+      var dir = fs[dirs[i]];
       if (dir && dir.type === 'dir' && dir.children) {
         for (var j = 0; j < dir.children.length; j++) {
-          var childPath = PATH[i] + '/' + dir.children[j];
-          var child = fs[childPath];
+          var child = fs[dirs[i] + '/' + dir.children[j]];
           if (child && child.executable && names.indexOf(dir.children[j]) === -1) names.push(dir.children[j]);
         }
       }
     }
-    return names;
+    return names.sort();
   }
 
   function tabComplete(value) {
@@ -961,7 +3169,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
 
     var dir = fs[dirPath];
-    if (!dir || dir.type !== 'dir' || dir.restricted) return { matches: [], prefix: partial, isPath: true };
+    if (!dir || dir.type !== 'dir' || !canRead(dirPath)) return { matches: [], prefix: partial, isPath: true };
 
     var matches = dir.children.filter(function(c) { return c.startsWith(namePrefix); });
     return { matches: matches, prefix: namePrefix, isPath: true, dirPath: dirPath, lastSlash: lastSlash, partial: partial };
@@ -1044,7 +3252,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       else { historyIndex = history.length; input.value = ''; syncTyped(); }
     } else if (e.key === 'l' && e.ctrlKey) {
       e.preventDefault();
-      commands.clear();
+      clearTerminal();
       scrollToBottom();
     } else if (e.key === 'Tab') {
       e.preventDefault();
