@@ -285,6 +285,13 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
 
   var cwd = HOME;
   var prevDir = cwd;
+
+  // Remote login sessions (ssh). Empty = the local guest@securit shell. Each
+  // frame overrides the prompt identity and remembers what to restore on exit.
+  var sessions = [];
+  function curUser() { return sessions.length ? sessions[sessions.length - 1].user : 'guest'; }
+  function curHost() { return sessions.length ? sessions[sessions.length - 1].host : 'securit'; }
+
   var history = loadJSON(HIST_KEY) || [];
   var historyIndex = history.length;
   function persistHistory() {
@@ -333,7 +340,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     var span = document.createElement('span');
     var user = document.createElement('span');
     user.className = 'prompt-user';
-    user.textContent = 'guest@securit';
+    user.textContent = curUser() + '@' + curHost();
     var sep = document.createElement('span');
     sep.className = 'prompt-sep';
     sep.textContent = ':';
@@ -866,8 +873,9 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     function flush() { if (cur) { toks.push(cur); cur = null; } }
     while (i < n) {
       var c = line[i];
-      if (c === ' ' || c === '\t') { flush(); i++; continue; }
-      if (c === '#' && !cur) break;
+      if (c === ' ' || c === '\t' || c === '\r') { flush(); i++; continue; }
+      if (c === '\n') { flush(); toks.push({ op: ';' }); i++; continue; }
+      if (c === '#' && !cur) { while (i < n && line[i] !== '\n') i++; continue; }
       if (c === "'") {
         var j = line.indexOf("'", i + 1);
         if (j < 0) return { error: 'syntax error: unterminated quoted string' };
@@ -903,19 +911,81 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
         continue;
       }
       if (c === '<') { flush(); toks.push({ op: '<' }); i++; continue; }
-      var start = i;
-      while (i < n && ' \t\'"\\|&;<>'.indexOf(line[i]) < 0) i++;
-      seg(line.slice(start, i), null);
+      var run = '';
+      while (i < n) {
+        var pc = line[i];
+        if (pc === '$' && line[i + 1] === '(') {
+          // keep $( ... ) — and $(( ... )) — intact inside the word, spaces and all
+          var depth = 0, k2 = i + 1;
+          while (k2 < n) {
+            if (line[k2] === '(') depth++;
+            else if (line[k2] === ')') { depth--; if (!depth) { k2++; break; } }
+            k2++;
+          }
+          run += line.slice(i, k2);
+          i = k2;
+          continue;
+        }
+        if (pc === '`') {
+          var k3 = line.indexOf('`', i + 1);
+          k3 = k3 < 0 ? n : k3 + 1;
+          run += line.slice(i, k3);
+          i = k3;
+          continue;
+        }
+        if (' \t\n\r\'"\\|&;<>'.indexOf(pc) >= 0) break;
+        run += pc;
+        i++;
+      }
+      seg(run, null);
     }
     flush();
     return { toks: toks };
   }
 
-  // ── Shell: expansion ($VAR, ${VAR}, $?, ~, globs) ────────────────────────
+  // ── Shell: expansion ($VAR, ${VAR}, $?, $(cmd), $((math)), ~, globs) ─────
+  function evalArith(expr) {
+    var s = expr.replace(/\$?[A-Za-z_][A-Za-z0-9_]*/g, function(nm) {
+      var v = parseFloat(env[nm.charAt(0) === '$' ? nm.slice(1) : nm]);
+      return isNaN(v) ? '0' : String(v);
+    });
+    if (!/^[\d+\-*/%()\s.<>=!&|?:]*$/.test(s)) return null;
+    try {
+      var val = Function('"use strict"; return (' + s + ');')();
+      if (typeof val === 'boolean') val = val ? 1 : 0;
+      if (typeof val !== 'number' || !isFinite(val)) return null;
+      return String(Math.trunc(val));
+    } catch (e) { return null; }
+  }
   function expandVars(text) {
     var out = '', i = 0, m;
     while (i < text.length) {
+      if (text[i] === '`') {
+        var bt = text.indexOf('`', i + 1);
+        if (bt > 0) {
+          out += captureRun(text.slice(i + 1, bt)).replace(/\n+$/, '');
+          i = bt + 1;
+          continue;
+        }
+      }
       if (text[i] === '$') {
+        if (text[i + 1] === '(') {
+          var depth = 0, j2 = i + 1;
+          while (j2 < text.length) {
+            if (text[j2] === '(') depth++;
+            else if (text[j2] === ')') { depth--; if (!depth) { j2++; break; } }
+            j2++;
+          }
+          if (text[i + 2] === '(' && text.slice(j2 - 2, j2) === '))') {
+            var av = evalArith(text.slice(i + 3, j2 - 2));
+            if (av === null) { termWrite('sh: arithmetic syntax error\n'); av = '0'; }
+            out += av;
+          } else {
+            out += captureRun(text.slice(i + 2, j2 - 1)).replace(/\n+$/, '');
+          }
+          i = j2;
+          continue;
+        }
         if (text[i + 1] === '?') { out += String(lastExit); i += 2; continue; }
         if (text[i + 1] === '$') { out += String(shellPid); i += 2; continue; }
         if (text[i + 1] === '{') {
@@ -958,66 +1028,189 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     return out.length ? out : null;
   }
   function expandWord(word) {
-    var text = '', mayGlob = false;
+    // Build fields: quoted segments never split; whitespace in the expansion
+    // of unquoted segments ($VAR, $(cmd)) splits the word into fields.
+    var parts = [''], hadQuoted = false, mayGlob = false;
     for (var i = 0; i < word.length; i++) {
       var s = word[i];
-      if (s.quote === "'") text += s.text;
-      else if (s.quote === '"') text += expandVars(s.text);
-      else {
-        var t = expandVars(s.text);
-        if (i === 0 && (t === '~' || t.slice(0, 2) === '~/')) t = env.HOME + t.slice(1);
-        if (/[*?]/.test(t)) mayGlob = true;
-        text += t;
+      if (s.quote !== null) {
+        hadQuoted = true;
+        parts[parts.length - 1] += s.quote === "'" ? s.text : expandVars(s.text);
+        continue;
       }
+      var t = expandVars(s.text);
+      if (i === 0 && (t === '~' || t.slice(0, 2) === '~/')) t = env.HOME + t.slice(1);
+      if (/[*?]/.test(t)) mayGlob = true;
+      var pieces = t.split(/[ \t\n]+/);
+      parts[parts.length - 1] += pieces[0];
+      for (var p = 1; p < pieces.length; p++) parts.push(pieces[p]);
     }
-    if (mayGlob) {
-      var g = expandGlobWord(text);
-      if (g) return g;
+    var fields = parts.filter(function(f) { return f !== ''; });
+    if (!fields.length) return hadQuoted ? [''] : [];
+    var out = [];
+    for (var f = 0; f < fields.length; f++) {
+      var g = mayGlob && /[*?]/.test(fields[f]) ? expandGlobWord(fields[f]) : null;
+      if (g) out = out.concat(g);
+      else out.push(fields[f]);
     }
-    return [text];
+    return out;
   }
 
   // ── Shell: parser ────────────────────────────────────────────────────────
-  // Returns { items: [{op, pipe:[{words, redirs}], bg}] } where op is the
-  // operator linking the item to the previous one (';', '&&' or '||').
-  function parseTokens(tk) {
-    if (tk.error) return tk;
-    var toks = tk.toks;
-    var items = [], op = ';', pipe = [];
-    var cmd = { words: [], redirs: {} };
-    function cmdEmpty() { return !cmd.words.length && !Object.keys(cmd.redirs).length; }
-    function pushCmd() { pipe.push(cmd); cmd = { words: [], redirs: {} }; }
-    function pushItem(bg) {
-      if (!cmdEmpty()) pushCmd();
-      if (pipe.length) items.push({ op: op, pipe: pipe, bg: !!bg });
-      pipe = [];
+  // Recursive descent over the token stream. Produces {stmts:[{op, node}]}
+  // where op links the statement to the previous one (';', '&&' or '||') and
+  // node is either {type:'pipeline', pipe:[{words,redirs}], bg} or a compound
+  // node for if/for/while/until. Keywords count only in command position.
+  function parseProgram(toks) {
+    var pos = 0;
+
+    function wordLiteral(word) {
+      return word.length === 1 && word[0].quote === null ? word[0].text : null;
     }
-    var pendingRedir = null;
-    for (var i = 0; i < toks.length; i++) {
-      var t = toks[i];
-      if (t.word) {
-        if (pendingRedir) { cmd.redirs[pendingRedir] = expandWord(t.word)[0]; pendingRedir = null; }
-        else cmd.words.push(t.word);
-        continue;
-      }
-      if (pendingRedir) return { error: 'syntax error near unexpected token `' + t.op + "'" };
-      if (t.op === '>') pendingRedir = 'out';
-      else if (t.op === '>>') pendingRedir = 'append';
-      else if (t.op === '<') pendingRedir = 'in';
-      else if (t.op === '2>') pendingRedir = 'err';
-      else if (t.op === '2>>') pendingRedir = 'errAppend';
-      else if (t.op === '2>&1') cmd.redirs.errToOut = true;
-      else if (t.op === '|') {
-        if (cmdEmpty()) return { error: "syntax error near unexpected token `|'" };
-        pushCmd();
-      } else {
-        pushItem(t.op === '&');
-        op = t.op === '&' ? ';' : t.op;
-      }
+    function expectWord(s) {
+      var save = pos;
+      while (toks[pos] && toks[pos].op === ';') pos++;
+      var t = toks[pos];
+      if (t && t.word && wordLiteral(t.word) === s) { pos++; return true; }
+      pos = save;
+      return false;
     }
-    if (pendingRedir) return { error: 'syntax error: expected redirection target' };
-    pushItem(false);
-    return { items: items };
+
+    function parsePipelineNode() {
+      var pipe = [];
+      var cmd = { words: [], redirs: {} };
+      var pendingRedir = null;
+      function cmdEmpty() { return !cmd.words.length && !Object.keys(cmd.redirs).length; }
+      loop:
+      for (;;) {
+        var t = toks[pos];
+        if (!t) break;
+        if (t.word) {
+          if (pendingRedir) { cmd.redirs[pendingRedir] = t.word; pendingRedir = null; }
+          else cmd.words.push(t.word);
+          pos++;
+          continue;
+        }
+        if (pendingRedir) return { error: "syntax error near unexpected token `" + t.op + "'" };
+        switch (t.op) {
+          case '>': pendingRedir = 'out'; pos++; break;
+          case '>>': pendingRedir = 'append'; pos++; break;
+          case '<': pendingRedir = 'in'; pos++; break;
+          case '2>': pendingRedir = 'err'; pos++; break;
+          case '2>>': pendingRedir = 'errAppend'; pos++; break;
+          case '2>&1': cmd.redirs.errToOut = true; pos++; break;
+          case '|':
+            if (cmdEmpty()) return { error: "syntax error near unexpected token `|'" };
+            pipe.push(cmd);
+            cmd = { words: [], redirs: {} };
+            pos++;
+            break;
+          default: break loop;
+        }
+      }
+      if (pendingRedir) return { error: 'syntax error: expected redirection target' };
+      if (!cmdEmpty()) pipe.push(cmd);
+      else if (pipe.length) return { error: "syntax error near unexpected token `|'" };
+      if (!pipe.length) return { error: "syntax error near unexpected token `" + (toks[pos] ? toks[pos].op : 'newline') + "'" };
+      return { type: 'pipeline', pipe: pipe, bg: false };
+    }
+
+    function parseIf() {
+      pos++;
+      var cond = parseList(['then']);
+      if (cond.error) return cond;
+      if (!expectWord('then')) return { error: "syntax error: expected `then'" };
+      var thenL = parseList(['elif', 'else', 'fi']);
+      if (thenL.error) return thenL;
+      var elifs = [], els = null;
+      for (;;) {
+        if (expectWord('elif')) {
+          var c2 = parseList(['then']);
+          if (c2.error) return c2;
+          if (!expectWord('then')) return { error: "syntax error: expected `then'" };
+          var t2 = parseList(['elif', 'else', 'fi']);
+          if (t2.error) return t2;
+          elifs.push({ cond: c2.stmts, then: t2.stmts });
+          continue;
+        }
+        if (expectWord('else')) {
+          var e2 = parseList(['fi']);
+          if (e2.error) return e2;
+          els = e2.stmts;
+        }
+        if (!expectWord('fi')) return { error: "syntax error: expected `fi'" };
+        break;
+      }
+      return { type: 'if', cond: cond.stmts, then: thenL.stmts, elifs: elifs, els: els };
+    }
+
+    function parseFor() {
+      pos++;
+      var vt = toks[pos];
+      var vname = vt && vt.word ? wordLiteral(vt.word) : null;
+      if (!vname || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(vname)) return { error: 'syntax error: bad for loop variable' };
+      pos++;
+      var words = [];
+      if (expectWord('in')) {
+        while (toks[pos] && toks[pos].word) { words.push(toks[pos].word); pos++; }
+      }
+      if (!expectWord('do')) return { error: "syntax error: expected `do'" };
+      var body = parseList(['done']);
+      if (body.error) return body;
+      if (!expectWord('done')) return { error: "syntax error: expected `done'" };
+      return { type: 'for', varName: vname, words: words, body: body.stmts };
+    }
+
+    function parseWhileUntil(until) {
+      pos++;
+      var cond = parseList(['do']);
+      if (cond.error) return cond;
+      if (!expectWord('do')) return { error: "syntax error: expected `do'" };
+      var body = parseList(['done']);
+      if (body.error) return body;
+      if (!expectWord('done')) return { error: "syntax error: expected `done'" };
+      return { type: 'while', until: until, cond: cond.stmts, body: body.stmts };
+    }
+
+    function parseCommand() {
+      var t = toks[pos];
+      var kw = t && t.word ? wordLiteral(t.word) : null;
+      if (kw === 'if') return parseIf();
+      if (kw === 'for') return parseFor();
+      if (kw === 'while') return parseWhileUntil(false);
+      if (kw === 'until') return parseWhileUntil(true);
+      if (kw && ['then', 'elif', 'else', 'fi', 'do', 'done'].indexOf(kw) >= 0) {
+        return { error: "syntax error near unexpected token `" + kw + "'" };
+      }
+      return parsePipelineNode();
+    }
+
+    function parseList(stopWords) {
+      var stmts = [], op = ';';
+      for (;;) {
+        while (toks[pos] && toks[pos].op === ';') pos++;
+        var t = toks[pos];
+        if (!t) break;
+        if (t.word && stopWords && stopWords.indexOf(wordLiteral(t.word)) >= 0) break;
+        var node = parseCommand();
+        if (node.error) return node;
+        stmts.push({ op: op, node: node });
+        op = ';';
+        var s = toks[pos];
+        if (!s) break;
+        if (s.op === '&') { node.bg = true; pos++; continue; }
+        if (s.op === '&&' || s.op === '||') { op = s.op; pos++; continue; }
+        if (s.op === ';') continue;
+        if (s.word && stopWords && stopWords.indexOf(wordLiteral(s.word)) >= 0) break;
+        return { error: "syntax error near unexpected token `" + (s.op || wordLiteral(s.word) || 'word') + "'" };
+      }
+      return { stmts: stmts };
+    }
+
+    var prog = parseList(null);
+    if (prog.error) return prog;
+    if (toks[pos]) return { error: "syntax error near unexpected token `" + (toks[pos].op || wordLiteral(toks[pos].word) || 'word') + "'" };
+    return prog;
   }
 
   // ── Shell: execution ─────────────────────────────────────────────────────
@@ -1025,7 +1218,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   function defineApplets(obj) { for (var k in obj) applets[k] = obj[k]; }
   // Applets that take over the screen / run in real time when started from an
   // interactive prompt (standalone, without stdout redirection).
-  var INTERACTIVE = { vi: true, sl: true, sleep: true, yes: true };
+  var INTERACTIVE = { vi: true, sl: true, sleep: true, yes: true, ssh: true };
 
   function registerAppletBinaries() {
     var names = Object.keys(applets).sort();
@@ -1037,51 +1230,133 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
         bin.children.push(names[i]);
       }
     }
-    fs['/bin/busybox'].content = 'ELF ...busybox multi-call binary (stripped) ';
+    fs['/bin/busybox'].content = '\u007fELF\u0002\u0001\u0001\u0000...busybox multi-call binary (stripped)\u0000';
     fs['/bin/busybox'].size = 1084216;
     if (bin.children.indexOf('busybox') < 0) bin.children.push('busybox');
     bin.children.sort();
   }
 
+  // stdout sink: normally the terminal; a capture buffer during $(...)
+  var captureBuf = null;
+  var substDepth = 0;
+  var noInteractive = 0;
+
   function termWrite(text) {
     if (!text) return;
+    if (captureBuf !== null) { captureBuf.push(String(text)); return; }
     var lines = String(text).split('\n');
     if (lines[lines.length - 1] === '') lines.pop();
     for (var i = 0; i < lines.length; i++) addLine(lines[i]);
   }
 
-  function runCommandLine(line) {
-    var parsed = parseTokens(tokenize(line));
-    if (parsed.error) { addLine('sh: ' + parsed.error); lastExit = 2; return; }
-    runItems(parsed.items, 0);
+  var substExit = null;   // exit code of the last $(...) run in this pipeline
+
+  function captureRun(cmdline) {
+    if (substDepth > 8) return '';
+    var saved = captureBuf;
+    captureBuf = [];
+    substDepth++;
+    var out = '';
+    try {
+      runCommandLine(cmdline);
+      out = captureBuf.join('');
+    } finally {
+      captureBuf = saved;
+      substDepth--;
+      substExit = lastExit;
+    }
+    return out;
   }
 
-  function runItems(items, i) {
-    while (i < items.length) {
-      var it = items[i];
-      var skip = (it.op === '&&' && lastExit !== 0) || (it.op === '||' && lastExit === 0);
+  function runCommandLine(line) {
+    var tk = tokenize(line);
+    if (tk.error) { termWrite('sh: ' + tk.error + '\n'); lastExit = 2; return; }
+    var prog = parseProgram(tk.toks);
+    if (prog.error) { termWrite('sh: ' + prog.error + '\n'); lastExit = 2; return; }
+    runItems(prog.stmts, 0);
+  }
+
+  function runItems(stmts, i) {
+    while (i < stmts.length) {
+      var st = stmts[i];
+      var skip = (st.op === '&&' && lastExit !== 0) || (st.op === '||' && lastExit === 0);
       i++;
       if (skip) continue;
-      var r = runPipeline(it, makeResume(items, i));
+      if (st.node.type !== 'pipeline') {
+        execCompound(st.node);
+        continue;
+      }
+      var r = runPipeline(st.node, makeResume(stmts, i));
       if (r === 'async') return;
     }
   }
-  function makeResume(items, i) {
+  function makeResume(stmts, i) {
     return function() {
-      runItems(items, i);
+      runItems(stmts, i);
       updatePrompt();
       scrollToBottom();
     };
   }
 
+  // Compound statements run fully synchronously; interactive applets inside
+  // them fall back to their non-tty behavior.
+  function execCompound(node) {
+    noInteractive++;
+    try {
+      if (node.type === 'if') {
+        runItems(node.cond, 0);
+        var branch = null;
+        if (lastExit === 0) branch = node.then;
+        else {
+          for (var e = 0; e < node.elifs.length; e++) {
+            runItems(node.elifs[e].cond, 0);
+            if (lastExit === 0) { branch = node.elifs[e].then; break; }
+          }
+          if (!branch) branch = node.els;
+        }
+        if (branch) runItems(branch, 0);
+        else lastExit = 0;
+      } else if (node.type === 'for') {
+        var vals = [];
+        for (var w = 0; w < node.words.length; w++) vals = vals.concat(expandWord(node.words[w]));
+        lastExit = 0;
+        for (var v = 0; v < vals.length; v++) {
+          env[node.varName] = vals[v];
+          runItems(node.body, 0);
+        }
+      } else if (node.type === 'while') {
+        var guard = 0;
+        var bodyExit = 0;
+        for (;;) {
+          if (++guard > 10000) { termWrite('sh: ' + (node.until ? 'until' : 'while') + ': loop aborted after 10000 iterations\n'); break; }
+          runItems(node.cond, 0);
+          if (node.until ? lastExit === 0 : lastExit !== 0) break;
+          runItems(node.body, 0);
+          bodyExit = lastExit;
+        }
+        lastExit = bodyExit;
+      }
+    } finally {
+      noInteractive--;
+    }
+  }
+
   function runPipeline(item, cont) {
     var procs = [];
+    substExit = null;
     for (var i = 0; i < item.pipe.length; i++) {
       var argv = [];
       for (var w = 0; w < item.pipe[i].words.length; w++) {
         argv = argv.concat(expandWord(item.pipe[i].words[w]));
       }
-      procs.push({ argv: argv, redirs: item.pipe[i].redirs });
+      // redirect targets are stored as unexpanded words; expand them now
+      var rawRedirs = item.pipe[i].redirs;
+      var redirs = {};
+      ['in', 'out', 'append', 'err', 'errAppend'].forEach(function(k) {
+        if (rawRedirs[k] !== undefined) redirs[k] = expandWord(rawRedirs[k])[0];
+      });
+      if (rawRedirs.errToOut) redirs.errToOut = true;
+      procs.push({ argv: argv, redirs: redirs });
     }
 
     // Leading VAR=value assignments
@@ -1090,7 +1365,8 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       var eq = asg.indexOf('=');
       env[asg.slice(0, eq)] = asg.slice(eq + 1);
     }
-    if (procs.length === 1 && !procs[0].argv.length) { lastExit = 0; return; }
+    // assignment-only command: exit status comes from any $(...) it ran
+    if (procs.length === 1 && !procs[0].argv.length) { lastExit = substExit !== null ? substExit : 0; return; }
 
     var first = procs[0];
     var name0 = first.argv[0];
@@ -1126,9 +1402,11 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
     if (xentry) {
       if (procs.length > 1) { termWrite('sh: ' + baseName(name0) + ': cannot run X11 applications in a pipeline\n'); lastExit = 1; return; }
-      spawnXApp(first.argv.join(' '), xentry, item.bg);
+      // inside $(...) or a compound statement, never block the shell on a window
+      var forceBg = item.bg || captureBuf !== null || noInteractive > 0;
+      spawnXApp(first.argv.join(' '), xentry, forceBg);
       lastExit = 0;
-      if (!item.bg) {
+      if (!forceBg) {
         if (foregroundPid !== null && processes[foregroundPid]) processes[foregroundPid].onExit = cont;
         return 'async';
       }
@@ -1136,7 +1414,8 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
 
     // Interactive applets (vi, sl, sleep, yes) — only standalone at a tty
-    if (procs.length === 1 && INTERACTIVE[name0] && !item.bg && !first.redirs.out && !first.redirs.append && !first.redirs.in) {
+    if (procs.length === 1 && INTERACTIVE[name0] && !item.bg && captureBuf === null && !noInteractive &&
+        !first.redirs.out && !first.redirs.append && !first.redirs.in) {
       return runInteractive(name0, first.argv.slice(1), cont);
     }
 
@@ -1157,7 +1436,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       }
       var isLast = p === procs.length - 1;
       var redirected = pr.redirs.out !== undefined || pr.redirs.append !== undefined;
-      var res = runSimple(pr.argv, input, { tty: isLast && !redirected });
+      var res = runSimple(pr.argv, input, { tty: isLast && !redirected && captureBuf === null });
       code = res.code;
       var stdout = res.stdout, stderr = res.stderr;
       if (pr.redirs.errToOut) { stdout += stderr; stderr = ''; }
@@ -1205,12 +1484,9 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   }
 
   function runScript(content) {
-    var lines = (content || '').split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i].trim();
-      if (!l || l.charAt(0) === '#') continue;
-      runCommandLine(l);
-    }
+    // the tokenizer treats newlines as ';' and understands multi-line
+    // if/for/while blocks, so a script is just one big command line
+    runCommandLine(String(content || ''));
   }
 
   // ── Shell built-ins ──────────────────────────────────────────────────────
@@ -1303,14 +1579,28 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       ctx.println('Filesystem restored to factory image.');
       return 0;
     },
-    exit: function(ctx) {
+    exit: function(ctx) { return logout(ctx); },
+    logout: function(ctx) { return logout(ctx); }
+  };
+
+  function logout(ctx) {
+    if (sessions.length) {
+      var frame = sessions.pop();
+      env.HOSTNAME = frame.prevHostEnv;
+      cwd = frame.prevCwd;
+      prevDir = frame.prevPrevDir;
       ctx.println('logout');
-      ctx.println('Connection to securit.se closed.');
-      input.disabled = true;
-      cursor.style.display = 'none';
+      ctx.println('Connection to ' + frame.connectedVia + ' closed.');
+      var cont = frame.cont;
+      if (cont) setTimeout(function() { lastExit = 0; cont(); }, 0);
       return 0;
     }
-  };
+    ctx.println('logout');
+    ctx.println('Connection to securit.se closed.');
+    input.disabled = true;
+    cursor.style.display = 'none';
+    return 0;
+  }
 
   function bbBanner() {
     return 'BusyBox v' + BB_VERSION + ' (' + BB_BUILD + ') built-in shell (ash)';
@@ -2227,6 +2517,511 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     'false': function() { return 1; }
   });
 
+  // ── awk (a practical subset) ─────────────────────────────────────────────
+  // Supports: BEGIN/END rules, /regex/ and expression patterns, print/printf,
+  // if/else, next/exit, assignments (= += -= *= /= %=), ++/--, arithmetic,
+  // comparisons, ~ !~, && || !, ?:, string concatenation, $0..$NF, NR NF FS
+  // OFS ORS, -F/-v/-f, and length/substr/index/toupper/tolower/int/sqrt/sprintf.
+  function awkLex(src) {
+    var toks = [], i = 0, n = src.length, prev = null;
+    function push(t) { toks.push(t); prev = t; }
+    while (i < n) {
+      var c = src[i];
+      if (c === '\\' && src[i + 1] === '\n') { i += 2; continue; }
+      if (c === ' ' || c === '\t' || c === '\r') { i++; continue; }
+      if (c === '\n' || c === ';') { push({ t: 'nl' }); i++; continue; }
+      if (c === '#') { while (i < n && src[i] !== '\n') i++; continue; }
+      if (c === '"') {
+        var s = '', j = i + 1;
+        while (j < n && src[j] !== '"') {
+          if (src[j] === '\\' && j + 1 < n) {
+            var e2 = src[j + 1];
+            s += e2 === 'n' ? '\n' : e2 === 't' ? '\t' : e2;
+            j += 2;
+          } else { s += src[j]; j++; }
+        }
+        if (j >= n) throw { message: 'awk: unterminated string' };
+        push({ t: 'str', v: s });
+        i = j + 1;
+        continue;
+      }
+      if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(src[i + 1] || ''))) {
+        var m3 = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/.exec(src.slice(i));
+        push({ t: 'num', v: parseFloat(m3[0]) });
+        i += m3[0].length;
+        continue;
+      }
+      if (/[A-Za-z_]/.test(c)) {
+        var m4 = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+        push({ t: 'ident', v: m4[0] });
+        i += m4[0].length;
+        continue;
+      }
+      if (c === '/') {
+        var pv = prev && prev.t === 'op' ? prev.v : null;
+        var operandBefore = prev && (prev.t === 'num' || prev.t === 'str' || prev.t === 'ident' ||
+          pv === ')' || pv === '++' || pv === '--');
+        if (!operandBefore) {
+          var j4 = i + 1, re4 = '';
+          while (j4 < n && src[j4] !== '/' && src[j4] !== '\n') {
+            if (src[j4] === '\\') { re4 += src[j4] + (src[j4 + 1] || ''); j4 += 2; }
+            else { re4 += src[j4]; j4++; }
+          }
+          if (src[j4] !== '/') throw { message: 'awk: unterminated regex' };
+          push({ t: 'regex', v: re4 });
+          i = j4 + 1;
+          continue;
+        }
+      }
+      var two = src.slice(i, i + 2);
+      if (['&&', '||', '==', '!=', '<=', '>=', '++', '--', '+=', '-=', '*=', '/=', '%=', '!~'].indexOf(two) >= 0) {
+        push({ t: 'op', v: two });
+        i += 2;
+        continue;
+      }
+      if ('{}(),$<>=+-*/%!~?:'.indexOf(c) >= 0) { push({ t: 'op', v: c }); i++; continue; }
+      throw { message: "awk: unexpected character '" + c + "'" };
+    }
+    return toks;
+  }
+
+  function awkParse(src) {
+    var toks = awkLex(src), pos = 0;
+    function peek() { return toks[pos]; }
+    function isOp(v) { var t = toks[pos]; return t && t.t === 'op' && t.v === v; }
+    function expectOp(v) { if (!isOp(v)) throw { message: "awk: expected '" + v + "'" }; pos++; }
+    function eatNl() { while (toks[pos] && toks[pos].t === 'nl') pos++; }
+
+    function parsePrimary() {
+      var t = peek();
+      if (!t) throw { message: 'awk: unexpected end of program' };
+      if (t.t === 'num') { pos++; return { k: 'num', v: t.v }; }
+      if (t.t === 'str') { pos++; return { k: 'str', v: t.v }; }
+      if (t.t === 'regex') { pos++; return { k: 'regex', v: t.v }; }
+      if (t.t === 'op' && t.v === '(') { pos++; var e = parseExpr(); expectOp(')'); return e; }
+      if (t.t === 'op' && t.v === '$') { pos++; return { k: 'field', e: parsePrimary() }; }
+      if (t.t === 'ident') {
+        pos++;
+        if (isOp('(')) {
+          pos++;
+          var args = [];
+          if (!isOp(')')) {
+            args.push(parseExpr());
+            while (isOp(',')) { pos++; args.push(parseExpr()); }
+          }
+          expectOp(')');
+          return { k: 'call', name: t.v, args: args };
+        }
+        if (isOp('++') || isOp('--')) { var o = toks[pos++].v; return { k: 'post', op: o, name: t.v }; }
+        return { k: 'var', name: t.v };
+      }
+      throw { message: 'awk: syntax error' };
+    }
+    function parseUnary() {
+      if (isOp('!')) { pos++; return { k: 'not', e: parseUnary() }; }
+      if (isOp('-')) { pos++; return { k: 'neg', e: parseUnary() }; }
+      if (isOp('+')) { pos++; return parseUnary(); }
+      if (isOp('++') || isOp('--')) {
+        var o = toks[pos++].v;
+        var t2 = toks[pos++];
+        if (!t2 || t2.t !== 'ident') throw { message: 'awk: syntax error' };
+        return { k: 'pre', op: o, name: t2.v };
+      }
+      return parsePrimary();
+    }
+    function parseMul() {
+      var e = parseUnary();
+      while (isOp('*') || isOp('/') || isOp('%')) {
+        var o = toks[pos++].v;
+        e = { k: 'bin', op: o, a: e, b: parseUnary() };
+      }
+      return e;
+    }
+    function parseAdd() {
+      var e = parseMul();
+      while (isOp('+') || isOp('-')) {
+        var o = toks[pos++].v;
+        e = { k: 'bin', op: o, a: e, b: parseMul() };
+      }
+      return e;
+    }
+    function parseConcat() {
+      var e = parseAdd();
+      for (;;) {
+        var t = peek();
+        if (t && (t.t === 'num' || t.t === 'str' || t.t === 'ident' ||
+            (t.t === 'op' && (t.v === '$' || t.v === '(')))) {
+          e = { k: 'concat', a: e, b: parseAdd() };
+          continue;
+        }
+        break;
+      }
+      return e;
+    }
+    function parseRel() {
+      var e = parseConcat();
+      var t = peek();
+      if (t && t.t === 'op' && ['==', '!=', '<', '<=', '>', '>='].indexOf(t.v) >= 0) {
+        pos++;
+        return { k: 'rel', op: t.v, a: e, b: parseConcat() };
+      }
+      return e;
+    }
+    function parseMatch() {
+      var e = parseRel();
+      while (isOp('~') || isOp('!~')) {
+        var o = toks[pos++].v;
+        e = { k: 'match', op: o, a: e, b: parseRel() };
+      }
+      return e;
+    }
+    function parseAnd() {
+      var e = parseMatch();
+      while (isOp('&&')) { pos++; e = { k: 'and', a: e, b: parseMatch() }; }
+      return e;
+    }
+    function parseOr() {
+      var e = parseAnd();
+      while (isOp('||')) { pos++; e = { k: 'or', a: e, b: parseAnd() }; }
+      return e;
+    }
+    function parseTernary() {
+      var e = parseOr();
+      if (isOp('?')) {
+        pos++;
+        var a = parseTernary();
+        expectOp(':');
+        return { k: 'tern', cond: e, a: a, b: parseTernary() };
+      }
+      return e;
+    }
+    function parseExpr() {
+      var t = toks[pos], t2 = toks[pos + 1];
+      if (t && t.t === 'ident' && t2 && t2.t === 'op' && ['=', '+=', '-=', '*=', '/=', '%='].indexOf(t2.v) >= 0) {
+        pos += 2;
+        return { k: 'assign', name: t.v, op: t2.v, e: parseExpr() };
+      }
+      return parseTernary();
+    }
+
+    function parseStmt() {
+      var t = peek();
+      if (!t) throw { message: 'awk: unexpected end of program' };
+      if (t.t === 'op' && t.v === '{') return parseBlock();
+      if (t.t === 'ident') {
+        if (t.v === 'print' || t.v === 'printf') {
+          pos++;
+          var args = [];
+          if (peek() && peek().t !== 'nl' && !isOp('}')) {
+            args.push(parseExpr());
+            while (isOp(',')) { pos++; args.push(parseExpr()); }
+          }
+          return { k: t.v, args: args };
+        }
+        if (t.v === 'if') {
+          pos++;
+          expectOp('(');
+          var c3 = parseExpr();
+          expectOp(')');
+          eatNl();
+          var thenS = parseStmt();
+          var elseS = null;
+          var save2 = pos;
+          eatNl();
+          if (peek() && peek().t === 'ident' && peek().v === 'else') { pos++; eatNl(); elseS = parseStmt(); }
+          else pos = save2;
+          return { k: 'if', cond: c3, then: thenS, els: elseS };
+        }
+        if (t.v === 'next') { pos++; return { k: 'next' }; }
+        if (t.v === 'exit') { pos++; return { k: 'exit' }; }
+        if (t.v === 'for' || t.v === 'while' || t.v === 'do' || t.v === 'getline' || t.v === 'function' || t.v === 'delete') {
+          throw { message: "awk: '" + t.v + "' is not supported by this emulator" };
+        }
+      }
+      return { k: 'expr', e: parseExpr() };
+    }
+    function parseBlock() {
+      expectOp('{');
+      var stmts = [];
+      for (;;) {
+        eatNl();
+        if (isOp('}')) { pos++; break; }
+        if (!peek()) throw { message: "awk: expected '}'" };
+        stmts.push(parseStmt());
+      }
+      return { k: 'block', stmts: stmts };
+    }
+
+    var rules = [];
+    for (;;) {
+      eatNl();
+      if (!peek()) break;
+      var t3 = peek();
+      if (t3.t === 'ident' && (t3.v === 'BEGIN' || t3.v === 'END')) {
+        pos++;
+        eatNl();
+        rules.push({ kind: t3.v, action: parseBlock() });
+        continue;
+      }
+      if (isOp('{')) {
+        rules.push({ kind: 'main', pattern: null, action: parseBlock() });
+        continue;
+      }
+      var pat = parseExpr();
+      if (isOp('{')) rules.push({ kind: 'main', pattern: pat, action: parseBlock() });
+      else rules.push({ kind: 'main', pattern: pat, action: null });
+    }
+    return rules;
+  }
+
+  function awkRun(rules, input, ctx, initVars, fsInit) {
+    var vars = { FS: fsInit || ' ', OFS: ' ', ORS: '\n', NR: 0, NF: 0 };
+    for (var k in initVars) vars[k] = initVars[k];
+    var fields = [''];
+    var exited = false, nexted = false;
+    function looksNum(v) {
+      return typeof v === 'number' || (v !== '' && /^\s*-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(v));
+    }
+    function num(v) { var n2 = parseFloat(v); return isNaN(n2) ? 0 : n2; }
+    function truthy(v) { return typeof v === 'number' ? v !== 0 : v !== ''; }
+    function toStr(v) {
+      if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(parseFloat(v.toFixed(6)));
+      return String(v);
+    }
+    function getField(i2) { return fields[i2] !== undefined ? fields[i2] : ''; }
+    function splitLine(line) {
+      fields = [line];
+      var fsv = String(vars.FS);
+      var parts;
+      if (fsv === ' ') parts = line.trim() === '' ? [] : line.trim().split(/[ \t]+/);
+      else if (fsv.length === 1) parts = line.split(fsv);
+      else {
+        try { parts = line.split(new RegExp(fsv)); } catch (e) { parts = line.split(fsv); }
+      }
+      for (var f2 = 0; f2 < parts.length; f2++) fields[f2 + 1] = parts[f2];
+      fields.length = parts.length + 1;
+      vars.NF = parts.length;
+    }
+    function reTest(pat, s4) {
+      try { return new RegExp(pat).test(s4); } catch (er) { return false; }
+    }
+    function compare(a, b, op) {
+      if (looksNum(a) && looksNum(b)) { a = num(a); b = num(b); }
+      else { a = toStr(a); b = toStr(b); }
+      switch (op) {
+        case '==': return a === b;
+        case '!=': return a !== b;
+        case '<': return a < b;
+        case '<=': return a <= b;
+        case '>': return a > b;
+        case '>=': return a >= b;
+      }
+      return false;
+    }
+    function awkSprintf(a) {
+      var fmt = toStr(a.length ? a[0] : ''), ai = 1;
+      return fmt.replace(/%[-+ 0-9.]*[sdifxXoc%]/g, function(spec) {
+        if (spec === '%%') return '%';
+        var v3 = ai < a.length ? a[ai++] : '';
+        var kind = spec.charAt(spec.length - 1);
+        if (kind === 's') return toStr(v3);
+        if (kind === 'c') return toStr(v3).charAt(0) || String.fromCharCode(num(v3));
+        if (kind === 'f') {
+          var pm = /\.(\d+)/.exec(spec);
+          return num(v3).toFixed(pm ? +pm[1] : 6);
+        }
+        if (kind === 'x') return Math.trunc(num(v3)).toString(16);
+        if (kind === 'X') return Math.trunc(num(v3)).toString(16).toUpperCase();
+        if (kind === 'o') return Math.trunc(num(v3)).toString(8);
+        return String(Math.trunc(num(v3)));
+      });
+    }
+    function callFn(name, a) {
+      switch (name) {
+        case 'length': return a.length ? toStr(a[0]).length : getField(0).length;
+        case 'substr': {
+          var st = Math.max(0, Math.trunc(num(a[1])) - 1);
+          return a.length > 2 ? toStr(a[0]).slice(st, st + Math.trunc(num(a[2]))) : toStr(a[0]).slice(st);
+        }
+        case 'index': return toStr(a[0]).indexOf(toStr(a[1])) + 1;
+        case 'toupper': return toStr(a[0]).toUpperCase();
+        case 'tolower': return toStr(a[0]).toLowerCase();
+        case 'int': return Math.trunc(num(a[0]));
+        case 'sqrt': return Math.sqrt(num(a[0]));
+        case 'sprintf': return awkSprintf(a);
+      }
+      throw { message: 'awk: calling undefined function ' + name };
+    }
+    function evalE(e) {
+      switch (e.k) {
+        case 'num': return e.v;
+        case 'str': return e.v;
+        case 'regex': return reTest(e.v, getField(0)) ? 1 : 0;
+        case 'var': return vars[e.name] !== undefined ? vars[e.name] : '';
+        case 'field': return getField(Math.trunc(num(evalE(e.e))));
+        case 'assign': {
+          var cur = vars[e.name] !== undefined ? vars[e.name] : '';
+          var v2 = evalE(e.e);
+          if (e.op === '=') vars[e.name] = v2;
+          else if (e.op === '+=') vars[e.name] = num(cur) + num(v2);
+          else if (e.op === '-=') vars[e.name] = num(cur) - num(v2);
+          else if (e.op === '*=') vars[e.name] = num(cur) * num(v2);
+          else if (e.op === '/=') vars[e.name] = num(cur) / num(v2);
+          else if (e.op === '%=') vars[e.name] = num(cur) % num(v2);
+          return vars[e.name];
+        }
+        case 'post': {
+          var old = num(vars[e.name]);
+          vars[e.name] = old + (e.op === '++' ? 1 : -1);
+          return old;
+        }
+        case 'pre': {
+          var nv = num(vars[e.name]) + (e.op === '++' ? 1 : -1);
+          vars[e.name] = nv;
+          return nv;
+        }
+        case 'not': return truthy(evalE(e.e)) ? 0 : 1;
+        case 'neg': return -num(evalE(e.e));
+        case 'bin': {
+          var a2 = num(evalE(e.a)), b2 = num(evalE(e.b));
+          if (e.op === '+') return a2 + b2;
+          if (e.op === '-') return a2 - b2;
+          if (e.op === '*') return a2 * b2;
+          if (e.op === '/') return b2 === 0 ? 0 : a2 / b2;
+          return b2 === 0 ? 0 : a2 % b2;
+        }
+        case 'concat': return toStr(evalE(e.a)) + toStr(evalE(e.b));
+        case 'rel': return compare(evalE(e.a), evalE(e.b), e.op) ? 1 : 0;
+        case 'match': {
+          var s3 = toStr(evalE(e.a));
+          var p3 = e.b.k === 'regex' ? e.b.v : toStr(evalE(e.b));
+          var hit = reTest(p3, s3);
+          return (e.op === '~' ? hit : !hit) ? 1 : 0;
+        }
+        case 'and': return truthy(evalE(e.a)) && truthy(evalE(e.b)) ? 1 : 0;
+        case 'or': return truthy(evalE(e.a)) || truthy(evalE(e.b)) ? 1 : 0;
+        case 'tern': return truthy(evalE(e.cond)) ? evalE(e.a) : evalE(e.b);
+        case 'call': return callFn(e.name, e.args.map(evalE));
+      }
+      return '';
+    }
+    function execS(st) {
+      if (!st || exited || nexted) return;
+      switch (st.k) {
+        case 'block':
+          for (var s5 = 0; s5 < st.stmts.length; s5++) {
+            execS(st.stmts[s5]);
+            if (exited || nexted) return;
+          }
+          return;
+        case 'print': {
+          var out2 = st.args.length
+            ? st.args.map(function(a3) { return toStr(evalE(a3)); }).join(toStr(vars.OFS))
+            : getField(0);
+          ctx.out(out2 + toStr(vars.ORS));
+          return;
+        }
+        case 'printf': ctx.out(awkSprintf(st.args.map(evalE))); return;
+        case 'if': if (truthy(evalE(st.cond))) execS(st.then); else execS(st.els); return;
+        case 'next': nexted = true; return;
+        case 'exit': exited = true; return;
+        case 'expr': evalE(st.e); return;
+      }
+    }
+    rules.forEach(function(r5) { if (r5.kind === 'BEGIN' && !exited) execS(r5.action); });
+    if (!exited) {
+      var lines5 = toLines(input);
+      for (var li5 = 0; li5 < lines5.length && !exited; li5++) {
+        vars.NR = li5 + 1;
+        splitLine(lines5[li5]);
+        nexted = false;
+        for (var r6 = 0; r6 < rules.length && !exited && !nexted; r6++) {
+          if (rules[r6].kind !== 'main') continue;
+          if (rules[r6].pattern && !truthy(evalE(rules[r6].pattern))) continue;
+          if (rules[r6].action) execS(rules[r6].action);
+          else ctx.println(getField(0));
+        }
+      }
+    }
+    exited = false;
+    nexted = false;
+    rules.forEach(function(r7) { if (r7.kind === 'END' && !exited) execS(r7.action); });
+    return 0;
+  }
+
+  defineApplets({
+    awk: function(ctx) {
+      var fsOpt = null, assigns = {}, progSrc = null, files = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (progSrc === null && a === '-F') fsOpt = ctx.args[++i];
+        else if (progSrc === null && a.length > 2 && a.slice(0, 2) === '-F') fsOpt = a.slice(2);
+        else if (progSrc === null && a === '-v') {
+          var kv = ctx.args[++i] || '';
+          var eq2 = kv.indexOf('=');
+          if (eq2 > 0) assigns[kv.slice(0, eq2)] = kv.slice(eq2 + 1);
+        } else if (progSrc === null && a === '-f') {
+          var pf = readFile(normPath(ctx.args[++i] || ''));
+          if (pf.error) { ctx.error((ctx.args[i] || '') + ': ' + pf.error); return 2; }
+          progSrc = pf.content;
+        } else if (progSrc === null) progSrc = a;
+        else files.push(a);
+      }
+      if (progSrc === null) { ctx.err('usage: awk [-F SEP] [-v VAR=VAL] PROGRAM [FILE]...'); return 2; }
+      var rules;
+      try { rules = awkParse(progSrc); }
+      catch (e) { ctx.err(e && e.message ? e.message : 'awk: syntax error'); return 2; }
+      var g = gatherInput(ctx, files);
+      try { awkRun(rules, g.text, ctx, assigns, fsOpt); }
+      catch (e2) { ctx.err(e2 && e2.message ? e2.message : 'awk: runtime error'); return 2; }
+      return g.code;
+    },
+    chown: function(ctx) {
+      var p = parseFlags(ctx.args, 'Rv');
+      if (p.operands.length < 2) { ctx.error('missing operand'); return 1; }
+      var spec = p.operands[0].split(/[:.]/);
+      var user = spec[0], group = spec[1];
+      var code = 0;
+      for (var i = 1; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        var e = fs[path];
+        if (!e) { ctx.error(p.operands[i] + ': No such file or directory'); code = 1; continue; }
+        // only root may give files away; guest may only "chown" own files to guest
+        if (e.owner !== 'guest' || (user && user !== 'guest') || (group && group !== 'guest')) {
+          ctx.error("changing ownership of '" + p.operands[i] + "': Operation not permitted");
+          code = 1;
+          continue;
+        }
+        if (user) e.owner = user;
+        if (group) e.group = group;
+        markDirty(path);
+        persistFS();
+      }
+      return code;
+    },
+    chgrp: function(ctx) {
+      var p = parseFlags(ctx.args, 'Rv');
+      if (p.operands.length < 2) { ctx.error('missing operand'); return 1; }
+      var group = p.operands[0];
+      var code = 0;
+      for (var i = 1; i < p.operands.length; i++) {
+        var path = normPath(p.operands[i]);
+        var e = fs[path];
+        if (!e) { ctx.error(p.operands[i] + ': No such file or directory'); code = 1; continue; }
+        // guest belongs only to group 'guest'
+        if (e.owner !== 'guest' || group !== 'guest') {
+          ctx.error("changing group of '" + p.operands[i] + "': Operation not permitted");
+          code = 1;
+          continue;
+        }
+        e.group = group;
+        markDirty(path);
+        persistFS();
+      }
+      return code;
+    }
+  });
+
   function evalTest(a) {
     if (!a.length) return false;
     if (a[0] === '!') return !evalTest(a.slice(1));
@@ -2326,8 +3121,29 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       '       BusyBox vi. Saved files persist in your browser (localStorage).', '',
       '       Normal mode: h j k l arrows, w b, 0 $ ^, gg G, x, dd, dw, yy, p P,',
       '       r, u, i I a A o O, /pattern, n N, ZZ', '',
-      '       Command mode: :w [FILE], :q, :q!, :wq, :x, :N (go to line N)', '',
+      '       Command mode: :w [FILE], :q, :q!, :wq, :x, :N (go to line N),',
+      '       :[range]s/pat/repl/[gi] where range is %, N, N,M, . or $', '',
       '                              July 11, 2026                          VI(1)'
+    ],
+    ssh: [
+      'SSH(1)                    General Commands Manual                   SSH(1)', '',
+      'NAME', '       ssh - OpenSSH remote login client (emulated)', '',
+      'SYNOPSIS',
+      '       ssh [-v] [-p port] [-i identity] [-l login] [user@]host [command]', '',
+      'DESCRIPTION',
+      '       An OpenSSH-style client for securit.se. A browser tab cannot open',
+      '       raw TCP sockets, so this connects to a small set of emulated hosts',
+      '       rather than the real network; host keys you accept are written to',
+      '       ~/.ssh/known_hosts and persist across reloads, exactly like the',
+      '       real client. See ssh-keygen(1), scp(1).', '',
+      'REACHABLE HOSTS',
+      '       localhost, securit, securit.se, lab   publickey (drops you in)',
+      '       rainbow, rainbow.securit.se           password (banner has a hint)', '',
+      'NOTES',
+      '       For a client that reaches real servers you would run a',
+      '       WebSocket-to-TCP relay and point a JS/WASM SSH stack at it; a',
+      '       static page alone cannot.', '',
+      '                              July 11, 2026                         SSH(1)'
     ]
   };
 
@@ -2404,8 +3220,13 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       ctx.println(picked.map(function(k) { return vals[k]; }).join(' '));
       return 0;
     },
-    hostname: function(ctx) { ctx.println(env.HOSTNAME); return 0; },
-    whoami: function(ctx) { ctx.println(env.USER); return 0; },
+    hostname: function(ctx) {
+      if (ctx.args.indexOf('-I') >= 0 || ctx.args.indexOf('-i') >= 0) { ctx.println(NET.ip); return 0; }
+      if (ctx.args.indexOf('-f') >= 0) { ctx.println(curHost() + (curHost().indexOf('.') < 0 ? '.securit.se' : '')); return 0; }
+      ctx.println(curHost());
+      return 0;
+    },
+    whoami: function(ctx) { ctx.println(curUser()); return 0; },
     logname: function(ctx) { ctx.println(env.USER); return 0; },
     groups: function(ctx) { ctx.println('guest'); return 0; },
     id: function(ctx) { ctx.println('uid=1000(guest) gid=1000(guest) groups=1000(guest)'); return 0; },
@@ -2642,6 +3463,232 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     'false': function() { return 1; }
   });
 
+  // ── Emulated network ─────────────────────────────────────────────────────
+  // No real packets leave the browser; this models one self-consistent host
+  // (matching the login banner and /etc/resolv.conf) plus a handful of
+  // reachable peers, shared by ssh and the networking applets.
+  var NET = {
+    ip: '192.168.1.42', mask: '255.255.255.0', cidr: 24, bcast: '192.168.1.255',
+    gw: '192.168.1.1', dns: '192.168.1.1', mac: '52:54:00:9d:3a:7c',
+    iface: 'eth0', rxb: 0, txb: 0
+  };
+  // hostname -> {ip, ssh:{...}} ; ssh present means an sshd is listening.
+  var HOSTS = {
+    'localhost':          { ip: '127.0.0.1',    ssh: { host: 'securit', auth: 'key', loopback: true } },
+    '127.0.0.1':          { ip: '127.0.0.1',    ssh: { host: 'securit', auth: 'key', loopback: true } },
+    'securit':            { ip: '192.168.1.42', ssh: { host: 'securit', auth: 'key', loopback: true } },
+    'securit.se':         { ip: '192.168.1.42', ssh: { host: 'securit', auth: 'key', loopback: true } },
+    'lab':                { ip: '192.168.1.50', ssh: { host: 'lab',     auth: 'key',
+                              motd: ['  _        _     ', ' | |  __ _| |__  ', ' | | / _` | \'_ \\ ', ' | || (_| | |_) |', ' |_(_)__,_|_.__/ ', '',
+                                     'lab.securit.se — scratch box. Same disk as securit (shared home).', ''] } },
+    'lab.securit.se':     { ip: '192.168.1.50', alias: 'lab' },
+    'rainbow':            { ip: '10.20.30.7',   ssh: { host: 'rainbow', auth: 'password', password: 'rainbow',
+                              banner: ['+------------------------------------------------+',
+                                       '|  rainbow.securit.se  —  public demo shell      |',
+                                       '|  This is a courtesy account. Password: rainbow |',
+                                       '+------------------------------------------------+'],
+                              motd: ['Welcome to Rainbow 🌈  (demo). Be nice; the disk is shared.', ''] } },
+    'rainbow.securit.se': { ip: '10.20.30.7',   alias: 'rainbow' },
+    'router':             { ip: '192.168.1.1' },
+    'gateway':            { ip: '192.168.1.1' }
+  };
+  function resolveHost(name) {
+    var h = HOSTS[name.toLowerCase()];
+    if (h && h.alias) h = HOSTS[h.alias];
+    return h || null;
+  }
+  function isIP(s) { return /^\d{1,3}(\.\d{1,3}){3}$/.test(s); }
+
+  // Stable pseudo-random bytes from a seed string (no real crypto needed).
+  function seededBytes(seed, n) {
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    var out = [];
+    for (var j = 0; j < n; j++) { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h >>>= 0; out.push(h & 0xff); }
+    return out;
+  }
+  function b64(bytes) {
+    var CH = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', s = '';
+    for (var i = 0; i < bytes.length; i += 3) {
+      var n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+      s += CH[(n >> 18) & 63] + CH[(n >> 12) & 63];
+      s += i + 1 < bytes.length ? CH[(n >> 6) & 63] : '';
+      s += i + 2 < bytes.length ? CH[n & 63] : '';
+    }
+    return s;
+  }
+  function hostKeyBlob(host) { return 'AAAAC3NzaC1lZDI1NTE5AAAAI' + b64(seededBytes('key:' + host, 32)); }
+  function hostFingerprint(host) { return 'SHA256:' + b64(seededBytes('fp:' + host, 32)).slice(0, 43); }
+
+  function ensureDir(path) {
+    if (fs[path]) return;
+    var parent = parentOf(path);
+    ensureDir(parent);
+    if (!fs[path]) mkdirNode(path);
+  }
+  function knownHostsPath() { return HOME + '/.ssh/known_hosts'; }
+  function knownHostHas(host) {
+    var e = fs[knownHostsPath()];
+    if (!e) return false;
+    return e.content.split('\n').some(function(l) { return l.split(' ')[0] === host; });
+  }
+  function addKnownHost(host) {
+    ensureDir(HOME + '/.ssh');
+    if (fs[HOME + '/.ssh']) { fs[HOME + '/.ssh'].mode = 'drwx------'; markDirty(HOME + '/.ssh'); }
+    var line = host + ' ssh-ed25519 ' + hostKeyBlob(host) + '\n';
+    writeFile(knownHostsPath(), line, { append: true });
+  }
+
+  function parseSshArgs(args) {
+    var o = { user: null, host: null, port: 22, verbose: 0, ident: null, cmd: [], want: false, opts: [] };
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (o.host) { o.cmd.push(a); continue; }
+      if (a === '-v') { o.verbose++; continue; }
+      if (a === '-vv' || a === '-vvv') { o.verbose += a.length - 1; continue; }
+      if (a === '-p') { o.port = parseInt(args[++i], 10) || 22; continue; }
+      if (a.slice(0, 2) === '-p' && a.length > 2) { o.port = parseInt(a.slice(2), 10) || 22; continue; }
+      if (a === '-l') { o.user = args[++i]; continue; }
+      if (a === '-i') { o.ident = args[++i]; continue; }
+      if (a === '-o' || a === '-c' || a === '-b' || a === '-F') { i++; continue; }
+      if (a === '-T' || a === '-t' || a === '-q' || a === '-N' || a === '-x' || a === '-A' || a === '-C' || a === '-4' || a === '-6') continue;
+      if (a.charAt(0) === '-' && a.length > 1) continue;   // ignore unknown flags
+      // first operand: [user@]host
+      var at = a.indexOf('@');
+      if (at >= 0) { o.user = a.slice(0, at); o.host = a.slice(at + 1); }
+      else o.host = a;
+    }
+    if (o.host && !o.user) o.user = curUser();
+    return o;
+  }
+
+  function sshVerbose(o, target, out) {
+    if (!o.verbose) return;
+    out('OpenSSH_9.7p1, OpenSSL 3.0.13 30 Jan 2024');
+    out('debug1: Connecting to ' + o.host + ' [' + target.ip + '] port ' + o.port + '.');
+    out('debug1: Connection established.');
+    out('debug1: Local version string SSH-2.0-OpenSSH_9.7p1');
+    out('debug1: Remote protocol version 2.0, remote software version OpenSSH_9.7p1');
+    out('debug1: SSH2_MSG_KEXINIT sent');
+    out('debug1: SSH2_MSG_KEXINIT received');
+    out('debug1: kex: algorithm: curve25519-sha256');
+    out('debug1: kex: host key algorithm: ssh-ed25519');
+    out('debug1: Server host key: ssh-ed25519 ' + hostFingerprint(target.ssh.host));
+    out('debug1: Host \'' + o.host + '\' is known and matches the ED25519 host key.');
+    out('debug1: SSH2_MSG_NEWKEYS sent');
+    out('debug1: SSH2_MSG_NEWKEYS received');
+  }
+
+  // ── ssh (interactive OpenSSH-style client) ───────────────────────────────
+  function launchSsh(args, cont) {
+    var o = parseSshArgs(args);
+
+    // Failures reachable before any prompt resolve synchronously, so the outer
+    // command list ('ssh bad && echo') continues normally with $? set.
+    if (!o.host) {
+      addLine('usage: ssh [-v] [-p port] [-i identity] [-l login_name] [user@]hostname [command]');
+      lastExit = 255; return;
+    }
+    var target = resolveHost(o.host);
+    if (!target && isIP(o.host)) { addLine('ssh: connect to host ' + o.host + ' port ' + o.port + ': Connection refused'); lastExit = 255; return; }
+    if (!target) { addLine('ssh: Could not resolve hostname ' + o.host + ': Name or service not known'); lastExit = 255; return; }
+    if (!target.ssh) { addLine('ssh: connect to host ' + o.host + ' port ' + o.port + ': Connection refused'); lastExit = 255; return; }
+
+    var srv = target.ssh;
+    var out = addLine;
+    sshVerbose(o, target, out);
+    var runCmd = o.cmd.length ? o.cmd.join(' ') : null;
+
+    // Terminal outcomes that must resume the outer command list now.
+    function finish(code) { lastExit = code; if (cont) cont(); }
+
+    function afterAuth() {
+      if (o.verbose) out('debug1: Entering interactive session.');
+      if (runCmd) {
+        runCommandLine(runCmd);   // ssh host command → run remotely, then close
+        finish(lastExit);
+        return;
+      }
+      // interactive login: push a session frame; logout resumes the outer list
+      var frame = {
+        user: o.user, host: srv.host, connectedVia: o.host,
+        prevHostEnv: env.HOSTNAME, prevCwd: cwd, prevPrevDir: prevDir, cont: cont
+      };
+      env.HOSTNAME = srv.host;
+      if (srv.motd) srv.motd.forEach(out);
+      else {
+        out('Linux ' + srv.host + ' 6.1.0-37-amd64 #1 SMP x86_64');
+        out('');
+      }
+      var last = new Date(Date.now() - (600000 + Math.floor(Math.random() * 6e8)));
+      out('Last login: ' + formatDate(last) + ' from ' + NET.ip);
+      sessions.push(frame);
+      lastExit = 0;
+      updatePrompt();
+      scrollToBottom();
+    }
+
+    function tryKnownHost(next) {
+      if (knownHostHas(srv.host) || knownHostHas(o.host)) { next(); return; }
+      var fp = hostFingerprint(srv.host);
+      out('The authenticity of host \'' + o.host + ' (' + target.ip + ')\' can\'t be established.');
+      out('ED25519 key fingerprint is ' + fp + '.');
+      out('This key is not known by any other names.');
+      promptRead('Are you sure you want to continue connecting (yes/no/[fingerprint])? ', {}, function(ans) {
+        if (ans === null) { addLine(''); return finish(130); }
+        ans = (ans || '').trim();
+        if (ans === 'yes' || ans === fp) {
+          addKnownHost(srv.host);
+          addLine("Warning: Permanently added '" + o.host + "' (ED25519) to the list of known hosts.");
+          next();
+        } else if (ans === 'no' || ans === '') {
+          addLine('Host key verification failed.');
+          finish(255);
+        } else {
+          addLine('Please type \'yes\', \'no\' or the fingerprint: (assuming no)');
+          addLine('Host key verification failed.');
+          finish(255);
+        }
+      });
+    }
+
+    function doAuth() {
+      // sshd Banner (pre-authentication), shown before any password prompt
+      if (srv.banner) srv.banner.forEach(out);
+      if (srv.auth === 'key') {
+        if (o.verbose) {
+          out('debug1: Authentications that can continue: publickey,password');
+          out('debug1: Next authentication method: publickey');
+          out('debug1: Offering public key: ' + (o.ident || HOME + '/.ssh/id_ed25519') + ' ED25519');
+          out('debug1: Server accepts key');
+          out('debug1: Authentication succeeded (publickey).');
+        }
+        afterAuth();
+        return;
+      }
+      // password auth, up to 3 tries
+      if (srv.banner && o.verbose) out('debug1: Next authentication method: password');
+      var tries = 0;
+      function ask() {
+        promptRead(o.user + '@' + o.host + "'s password: ", { password: true }, function(pw) {
+          if (pw === null) { addLine(''); return finish(130); }
+          if (pw === srv.password) { afterAuth(); return; }
+          tries++;
+          if (tries >= 3) {
+            addLine(o.user + '@' + o.host + ': Permission denied (publickey,password).');
+            return finish(255);
+          }
+          addLine('Permission denied, please try again.');
+          ask();
+        });
+      }
+      ask();
+    }
+
+    tryKnownHost(doAuth);
+    return 'async';
+  }
+
   // ── Interactive launchers (standalone commands at the tty) ───────────────
   function runInteractive(name, args, cont) {
     if (name === 'sl') {
@@ -2652,7 +3699,371 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     if (name === 'vi') return launchVi(args, cont);
     if (name === 'sleep') return runSleep(args, cont);
     if (name === 'yes') return runYes(args, cont);
+    if (name === 'ssh') return launchSsh(args, cont);
   }
+
+  // Drunken-bishop randomart, seeded from the key bytes (stable per key).
+  function randomArt(bytes, header, footer) {
+    var W = 17, H = 9, x = 8, y = 4, i, grid = [];
+    for (i = 0; i < H; i++) { grid.push([]); for (var c = 0; c < W; c++) grid[i].push(0); }
+    var startX = x, startY = y;
+    for (var b = 0; b < bytes.length; b++) {
+      var byte = bytes[b];
+      for (var s = 0; s < 4; s++) {
+        var d = byte & 3; byte >>= 2;
+        x += (d & 1) ? 1 : -1; y += (d & 2) ? 1 : -1;
+        x = Math.max(0, Math.min(W - 1, x)); y = Math.max(0, Math.min(H - 1, y));
+        grid[y][x]++;
+      }
+    }
+    var sym = ' .o+=*BOX@%&#/^';
+    var lines = [header];
+    for (i = 0; i < H; i++) {
+      var row = '|';
+      for (var j = 0; j < W; j++) {
+        if (i === startY && j === startX) row += 'S';
+        else if (i === y && j === x) row += 'E';
+        else row += sym.charAt(Math.min(grid[i][j], sym.length - 1));
+      }
+      lines.push(row + '|');
+    }
+    lines.push(footer);
+    return lines;
+  }
+
+  function httpGet(url) {
+    var m = /^(?:(https?):\/\/)?([^\/:]+)(?::(\d+))?(\/[^\s]*)?$/.exec(url);
+    if (!m) return { error: 'invalid' };
+    var host = m[2], path = m[4] || '/';
+    var target = resolveHost(host);
+    if (!target && !isIP(host)) return { error: 'resolve', host: host };
+    var ip = target ? target.ip : host;
+    var body;
+    if (target && target.ssh && target.ssh.host === 'rainbow') {
+      body = 'Rainbow demo server 🌈\nNothing to see here but good vibes.\n';
+    } else {
+      body = '<!DOCTYPE html>\n<html lang="en">\n<head><meta charset="UTF-8">\n<title>guest@securit:~$</title></head>\n<body>\n<!-- securit.se — a terminal in your browser. You are looking at it. -->\n</body>\n</html>\n';
+    }
+    return { host: host, ip: ip, path: path, body: body, status: 200, ctype: 'text/html' };
+  }
+
+  defineApplets({
+    ssh: function(ctx) {
+      var o = parseSshArgs(ctx.args);
+      if (!o.host) { ctx.err('usage: ssh [-v] [-p port] [-i identity] [-l login_name] [user@]hostname [command]'); return 255; }
+      var target = resolveHost(o.host);
+      if (!target && isIP(o.host)) { ctx.err('ssh: connect to host ' + o.host + ' port ' + o.port + ': Connection refused'); return 255; }
+      if (!target) { ctx.err('ssh: Could not resolve hostname ' + o.host + ': Name or service not known'); return 255; }
+      if (!target.ssh) { ctx.err('ssh: connect to host ' + o.host + ' port ' + o.port + ': Connection refused'); return 255; }
+      if (target.ssh.auth === 'password') { ctx.err(o.user + '@' + o.host + ': Permission denied (publickey,password).'); return 255; }
+      if (!o.cmd.length) { ctx.err('ssh: no tty present and no askpass program specified'); return 255; }
+      ctx.out(captureRun(o.cmd.join(' ')));
+      return lastExit;
+    },
+    'ssh-keygen': function(ctx) {
+      var type = 'ed25519', bits = 256, file = null, comment = curUser() + '@' + curHost(), showFp = false;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-t') type = ctx.args[++i];
+        else if (a === '-b') bits = parseInt(ctx.args[++i], 10) || bits;
+        else if (a === '-f') file = ctx.args[++i];
+        else if (a === '-C') comment = ctx.args[++i];
+        else if (a === '-N') i++;
+        else if (a === '-l') showFp = true;
+        else if (a === '-q') { /* quiet */ }
+      }
+      if (type === 'rsa' && bits === 256) bits = 3072;
+      var priv = file || (HOME + '/.ssh/id_' + type);
+      if (showFp) {
+        var pube = fs[priv + '.pub'] || fs[priv];
+        if (!pube) { ctx.error(priv + ': No such file or directory'); return 1; }
+        ctx.println(bits + ' ' + hostFingerprint('user:' + comment) + ' ' + comment + ' (' + type.toUpperCase() + ')');
+        return 0;
+      }
+      ctx.println('Generating public/private ' + type + ' key pair.');
+      ensureDir(HOME + '/.ssh');
+      if (fs[HOME + '/.ssh']) { fs[HOME + '/.ssh'].mode = 'drwx------'; markDirty(HOME + '/.ssh'); }
+      var blob = hostKeyBlob('user:' + comment);
+      var w1 = writeFile(priv, '-----BEGIN OPENSSH PRIVATE KEY-----\n' + b64(seededBytes('priv:' + comment, 96)) + '\n-----END OPENSSH PRIVATE KEY-----\n');
+      if (w1.error) { ctx.error(priv + ': ' + w1.error); return 1; }
+      if (fs[priv]) { fs[priv].mode = '-rw-------'; markDirty(priv); }
+      var pubLine = 'ssh-' + type + ' ' + blob + ' ' + comment + '\n';
+      writeFile(priv + '.pub', pubLine);
+      persistFS();
+      ctx.println('Your identification has been saved in ' + priv);
+      ctx.println('Your public key has been saved in ' + priv + '.pub');
+      ctx.println('The key fingerprint is:');
+      ctx.println(hostFingerprint('user:' + comment) + ' ' + comment);
+      ctx.println("The key's randomart image is:");
+      var hdr = ('+--[' + type.toUpperCase() + ' ' + bits + ']--+');
+      hdr = hdr.length >= 19 ? hdr.slice(0, 19) : hdr.slice(0, -4) + '-'.repeat(19 - hdr.length) + hdr.slice(-4);
+      randomArt(seededBytes('art:' + comment, 32), hdr, '+----[SHA256]-----+').forEach(function(l) { ctx.println(l); });
+      return 0;
+    },
+    scp: function(ctx) {
+      var p = parseFlags(ctx.args, 'rpqv');
+      if (p.operands.length < 2) { ctx.err('usage: scp [-r] source ... target'); return 1; }
+      function strip(spec) {
+        var at = spec.indexOf('@'), col = spec.indexOf(':');
+        if (col > 0 && (at < 0 || col > at)) {
+          var host = spec.slice(at + 1, col);
+          var t = resolveHost(host);
+          if (!t || !t.ssh) return { error: host };
+          return { path: spec.slice(col + 1) || '.' , remote: true };
+        }
+        return { path: spec };
+      }
+      var dst = strip(p.operands[p.operands.length - 1]);
+      if (dst.error) { ctx.err('ssh: Could not resolve hostname ' + dst.error + ': Name or service not known'); return 1; }
+      var code = 0;
+      for (var i = 0; i < p.operands.length - 1; i++) {
+        var src = strip(p.operands[i]);
+        if (src.error) { ctx.err('ssh: Could not resolve hostname ' + src.error + ': Name or service not known'); code = 1; continue; }
+        var r = copyNode({ error: function(s) { ctx.err('scp: ' + s); } }, normPath(src.path), normPath(dst.path), p.flags.r, src.path);
+        if (r === 0) ctx.println(baseName(src.path) + '                              100%  ' + String(entrySize(fs[normPath(src.path)] || { content: '' })).padStart(4) + '     1.2MB/s   00:00');
+        else code = 1;
+      }
+      return code;
+    },
+    ifconfig: function(ctx) {
+      ctx.println(NET.iface + ': flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500');
+      ctx.println('        inet ' + NET.ip + '  netmask ' + NET.mask + '  broadcast ' + NET.bcast);
+      ctx.println('        ether ' + NET.mac + '  txqueuelen 1000  (Ethernet)');
+      ctx.println('        RX packets 184213  bytes 201847362 (192.5 MiB)');
+      ctx.println('        TX packets 97412  bytes 12048213 (11.4 MiB)');
+      ctx.println('');
+      ctx.println('lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536');
+      ctx.println('        inet 127.0.0.1  netmask 255.0.0.0');
+      ctx.println('        loop  txqueuelen 1000  (Local Loopback)');
+      return 0;
+    },
+    ip: function(ctx) {
+      var sub = (ctx.args[0] || 'addr');
+      if (sub === 'a' || sub === 'addr' || sub === 'address') {
+        ctx.println('1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000');
+        ctx.println('    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00');
+        ctx.println('    inet 127.0.0.1/8 scope host lo');
+        ctx.println('2: ' + NET.iface + ': <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000');
+        ctx.println('    link/ether ' + NET.mac + ' brd ff:ff:ff:ff:ff:ff');
+        ctx.println('    inet ' + NET.ip + '/' + NET.cidr + ' brd ' + NET.bcast + ' scope global dynamic ' + NET.iface);
+        return 0;
+      }
+      if (sub === 'r' || sub === 'route') {
+        ctx.println('default via ' + NET.gw + ' dev ' + NET.iface + ' proto dhcp metric 100');
+        ctx.println('192.168.1.0/24 dev ' + NET.iface + ' proto kernel scope link src ' + NET.ip + ' metric 100');
+        return 0;
+      }
+      if (sub === 'l' || sub === 'link') {
+        ctx.println('1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000');
+        ctx.println('    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00');
+        ctx.println('2: ' + NET.iface + ': <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000');
+        ctx.println('    link/ether ' + NET.mac + ' brd ff:ff:ff:ff:ff:ff');
+        return 0;
+      }
+      ctx.err('Object "' + sub + '" is unknown, try "ip help".');
+      return 1;
+    },
+    ping: function(ctx) {
+      var count = null, host = null;
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-c') count = parseInt(ctx.args[++i], 10);
+        else if (a === '-w' || a === '-W' || a === '-i' || a === '-s') i++;
+        else if (a.charAt(0) !== '-') host = a;
+      }
+      if (!host) { ctx.err('ping: usage error: Destination address required'); return 1; }
+      var target = resolveHost(host);
+      if (!target && !isIP(host)) { ctx.err('ping: bad address \'' + host + '\''); return 1; }
+      var ip = target ? target.ip : host;
+      var n = count && count > 0 ? Math.min(count, 20) : 4;
+      ctx.println('PING ' + host + ' (' + ip + '): 56 data bytes');
+      var times = [];
+      for (var s = 0; s < n; s++) {
+        var t = +(0.03 + Math.random() * (ip === '127.0.0.1' ? 0.05 : 8)).toFixed(3);
+        times.push(t);
+        ctx.println('64 bytes from ' + ip + ': seq=' + s + ' ttl=64 time=' + t.toFixed(3) + ' ms');
+      }
+      var min = Math.min.apply(null, times), max = Math.max.apply(null, times);
+      var avg = times.reduce(function(x, y) { return x + y; }, 0) / times.length;
+      ctx.println('');
+      ctx.println('--- ' + host + ' ping statistics ---');
+      ctx.println(n + ' packets transmitted, ' + n + ' packets received, 0% packet loss');
+      ctx.println('round-trip min/avg/max = ' + min.toFixed(3) + '/' + avg.toFixed(3) + '/' + max.toFixed(3) + ' ms');
+      return 0;
+    },
+    traceroute: function(ctx) {
+      var host = ctx.args.filter(function(a) { return a.charAt(0) !== '-'; })[0];
+      if (!host) { ctx.err('traceroute: bad address'); return 1; }
+      var target = resolveHost(host);
+      if (!target && !isIP(host)) { ctx.err('traceroute: bad address \'' + host + '\''); return 1; }
+      var ip = target ? target.ip : host;
+      ctx.println('traceroute to ' + host + ' (' + ip + '), 30 hops max, 60 byte packets');
+      if (ip === '127.0.0.1' || ip === NET.ip) {
+        ctx.println(' 1  ' + host + ' (' + ip + ')  0.042 ms  0.031 ms  0.028 ms');
+        return 0;
+      }
+      ctx.println(' 1  ' + NET.gw + ' (' + NET.gw + ')  1.204 ms  1.118 ms  1.093 ms');
+      ctx.println(' 2  ' + ip + ' (' + ip + ')  ' + (2 + Math.random() * 6).toFixed(3) + ' ms  ' + (2 + Math.random() * 6).toFixed(3) + ' ms  ' + (2 + Math.random() * 6).toFixed(3) + ' ms');
+      return 0;
+    },
+    nslookup: function(ctx) {
+      var host = ctx.args.filter(function(a) { return a.charAt(0) !== '-'; })[0];
+      if (!host) { ctx.err('nslookup: missing host'); return 1; }
+      ctx.println('Server:\t\t' + NET.dns);
+      ctx.println('Address:\t' + NET.dns + '#53');
+      ctx.println('');
+      if (isIP(host)) {
+        var rev = null;
+        for (var k in HOSTS) { if (HOSTS[k].ip === host && !HOSTS[k].alias) { rev = k; break; } }
+        if (rev) { ctx.println(host.split('.').reverse().join('.') + '.in-addr.arpa\tname = ' + rev + '.'); return 0; }
+        ctx.println('** server can\'t find ' + host + ': NXDOMAIN');
+        return 1;
+      }
+      var target = resolveHost(host);
+      if (!target) { ctx.println('** server can\'t find ' + host + ': NXDOMAIN'); return 1; }
+      ctx.println('Name:\t' + host);
+      ctx.println('Address: ' + target.ip);
+      return 0;
+    },
+    host: function(ctx) {
+      var name = ctx.args.filter(function(a) { return a.charAt(0) !== '-'; })[0];
+      if (!name) { ctx.err('Usage: host [-v] hostname'); return 1; }
+      if (isIP(name)) {
+        var rev = null;
+        for (var k in HOSTS) { if (HOSTS[k].ip === name && !HOSTS[k].alias) { rev = k; break; } }
+        if (rev) ctx.println(name.split('.').reverse().join('.') + '.in-addr.arpa domain name pointer ' + rev + '.');
+        else { ctx.println('Host ' + name + ' not found: 3(NXDOMAIN)'); return 1; }
+        return 0;
+      }
+      var target = resolveHost(name);
+      if (!target) { ctx.println('Host ' + name + ' not found: 3(NXDOMAIN)'); return 1; }
+      ctx.println(name + ' has address ' + target.ip);
+      return 0;
+    },
+    dig: function(ctx) {
+      var name = ctx.args.filter(function(a) { return a.charAt(0) !== '-' && a.charAt(0) !== '@'; })[0];
+      if (!name) { ctx.err('dig: missing name'); return 1; }
+      var target = resolveHost(name);
+      ctx.println('; <<>> DiG 9.18.24 <<>> ' + name);
+      ctx.println(';; global options: +cmd');
+      ctx.println(';; Got answer:');
+      ctx.println(';; ->>HEADER<<- opcode: QUERY, status: ' + (target ? 'NOERROR' : 'NXDOMAIN') + ', id: ' + (12000 + (name.length * 137) % 50000));
+      ctx.println('');
+      ctx.println(';; QUESTION SECTION:');
+      ctx.println(';' + name + '.\t\t\tIN\tA');
+      if (target) {
+        ctx.println('');
+        ctx.println(';; ANSWER SECTION:');
+        ctx.println(name + '.\t\t300\tIN\tA\t' + target.ip);
+      }
+      ctx.println('');
+      ctx.println(';; Query time: 0 msec');
+      ctx.println(';; SERVER: ' + NET.dns + '#53(' + NET.dns + ')');
+      return target ? 0 : 1;
+    },
+    netstat: function(ctx) {
+      var p = parseFlags(ctx.args, 'tulnprea');
+      if (p.flags.r) {
+        ctx.println('Kernel IP routing table');
+        ctx.println('Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface');
+        ctx.println('0.0.0.0         ' + NET.gw + '     0.0.0.0         UG        0 0          0 ' + NET.iface);
+        ctx.println('192.168.1.0     0.0.0.0         255.255.255.0   U         0 0          0 ' + NET.iface);
+        return 0;
+      }
+      ctx.println('Active Internet connections (' + (p.flags.a ? 'servers and established' : 'w/o servers') + ')');
+      ctx.println('Proto Recv-Q Send-Q Local Address           Foreign Address         State');
+      ctx.println('tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN');
+      ctx.println('tcp        0      0 ' + NET.ip + ':22          ' + NET.gw + ':52134       ESTABLISHED');
+      ctx.println('tcp6       0      0 :::22                   :::*                    LISTEN');
+      return 0;
+    },
+    ss: function(ctx) {
+      ctx.println('State      Recv-Q Send-Q  Local Address:Port    Peer Address:Port');
+      ctx.println('LISTEN     0      128           0.0.0.0:22           0.0.0.0:*');
+      ctx.println('ESTAB      0      0        ' + NET.ip + ':22         ' + NET.gw + ':52134');
+      ctx.println('LISTEN     0      128              [::]:22              [::]:*');
+      return 0;
+    },
+    arp: function(ctx) {
+      ctx.println('Address                  HWtype  HWaddress           Flags Mask            Iface');
+      ctx.println(NET.gw.padEnd(24) + ' ether   52:54:00:12:34:56   C                     ' + NET.iface);
+      return 0;
+    },
+    route: function(ctx) {
+      ctx.println('Kernel IP routing table');
+      ctx.println('Destination     Gateway         Genmask         Flags Metric Ref    Use Iface');
+      ctx.println('default         ' + NET.gw + '     0.0.0.0         UG    100    0        0 ' + NET.iface);
+      ctx.println('192.168.1.0     0.0.0.0         255.255.255.0   U     100    0        0 ' + NET.iface);
+      return 0;
+    },
+    wget: function(ctx) {
+      var out = null, quiet = false, urls = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-O') out = ctx.args[++i];
+        else if (a === '-q') quiet = true;
+        else if (a.charAt(0) !== '-') urls.push(a);
+      }
+      if (!urls.length) { ctx.err('wget: missing URL'); return 1; }
+      var code = 0;
+      for (var u = 0; u < urls.length; u++) {
+        var r = httpGet(urls[u]);
+        if (r.error === 'resolve') { ctx.err('wget: bad address \'' + r.host + '\''); code = 1; continue; }
+        if (r.error) { ctx.err('wget: not an http or ftp url: ' + urls[u]); code = 1; continue; }
+        var fname = out || baseName(r.path) === '' || r.path === '/' ? (out || 'index.html') : baseName(r.path);
+        if (!quiet) {
+          ctx.err('Connecting to ' + r.host + ' (' + r.ip + ':80)... connected.');
+          ctx.err('HTTP request sent, awaiting response... 200 OK');
+          ctx.err('Length: ' + r.body.length + ' (' + Math.ceil(r.body.length / 1024) + 'K) [' + r.ctype + ']');
+          ctx.err("Saving to: '" + fname + "'");
+          ctx.err('');
+          ctx.err(fname + '  100%[===================>]  ' + r.body.length + '  --.-KB/s    in 0s');
+          ctx.err('');
+          ctx.err("'" + fname + "' saved [" + r.body.length + '/' + r.body.length + ']');
+        }
+        if (out === '-') { ctx.out(r.body); continue; }
+        var w = writeFile(normPath(fname), r.body);
+        if (w.error) { ctx.err('wget: ' + fname + ': ' + w.error); code = 1; }
+      }
+      return code;
+    },
+    curl: function(ctx) {
+      var headOnly = false, silent = false, saveO = false, outName = null, urls = [];
+      for (var i = 0; i < ctx.args.length; i++) {
+        var a = ctx.args[i];
+        if (a === '-I' || a === '--head') headOnly = true;
+        else if (a === '-s' || a === '--silent') silent = true;
+        else if (a === '-O') saveO = true;
+        else if (a === '-o') outName = ctx.args[++i];
+        else if (a === '-L' || a === '-k' || a === '-f') { /* ignore */ }
+        else if (a.charAt(0) !== '-') urls.push(a);
+      }
+      if (!urls.length) { ctx.err('curl: try \'curl --help\' for more information'); return 2; }
+      var code = 0;
+      for (var u = 0; u < urls.length; u++) {
+        var r = httpGet(urls[u]);
+        if (r.error === 'resolve') { if (!silent) ctx.err('curl: (6) Could not resolve host: ' + r.host); code = 6; continue; }
+        if (r.error) { ctx.err('curl: (1) unsupported URL: ' + urls[u]); code = 1; continue; }
+        if (headOnly) {
+          ctx.out('HTTP/1.1 200 OK\r\n');
+          ctx.out('Server: nginx/1.24.0\r\n');
+          ctx.out('Content-Type: ' + r.ctype + '\r\n');
+          ctx.out('Content-Length: ' + r.body.length + '\r\n');
+          ctx.out('Connection: keep-alive\r\n');
+          ctx.out('\r\n');
+          continue;
+        }
+        if (saveO || outName) {
+          var fname = outName || baseName(r.path) || 'index.html';
+          var w = writeFile(normPath(fname), r.body);
+          if (w.error) { ctx.err('curl: ' + fname + ': ' + w.error); code = 1; }
+          continue;
+        }
+        ctx.out(r.body);
+      }
+      return code;
+    }
+  });
 
   function runSleep(args, cont) {
     var secs = parseFloat(args[0]);
@@ -2854,10 +4265,70 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       if (thenQuit) quit(0);
       return true;
     }
+    function splitUnescaped(s, delim) {
+      var parts = [''];
+      for (var si = 0; si < s.length; si++) {
+        var sc = s.charAt(si);
+        if (sc === '\\' && si + 1 < s.length) {
+          if (s.charAt(si + 1) === delim) { parts[parts.length - 1] += delim; si++; }
+          else parts[parts.length - 1] += sc;
+          continue;
+        }
+        if (sc === delim) { parts.push(''); continue; }
+        parts[parts.length - 1] += sc;
+      }
+      return parts;
+    }
+    function exSubstitute(range, delim, rest) {
+      var parts = splitUnescaped(rest, delim);
+      var pat = parts[0] || lastSearch;
+      if (!pat) { message = 'No previous search'; return; }
+      var flagsS = parts[2] || '';
+      var reFlags = (flagsS.indexOf('i') >= 0 ? 'i' : '') + (flagsS.indexOf('g') >= 0 ? 'g' : '');
+      var reS, gRe;
+      try {
+        reS = new RegExp(pat, reFlags);
+        gRe = new RegExp(pat, reFlags.indexOf('g') >= 0 ? reFlags : reFlags + 'g');
+      } catch (e) { message = 'Bad pattern: ' + pat; return; }
+      var replS = (parts[1] || '').replace(/\$/g, '$$$$').replace(/&/g, '$$&').replace(/\\(\d)/g, '$$$1');
+      var lo, hi;
+      function lineNo(s) { return s === '$' ? buf.length - 1 : s === '.' ? cy : parseInt(s, 10) - 1; }
+      if (!range || range === '.') { lo = hi = cy; }
+      else if (range === '%') { lo = 0; hi = buf.length - 1; }
+      else if (range === '$') { lo = hi = buf.length - 1; }
+      else {
+        var pr2 = range.split(',');
+        lo = lineNo(pr2[0]);
+        hi = pr2.length > 1 ? lineNo(pr2[1]) : lo;
+      }
+      lo = Math.max(0, lo);
+      hi = Math.min(buf.length - 1, hi);
+      var nSub = 0, nLines = 0;
+      pushUndo();
+      for (var li2 = lo; li2 <= hi; li2++) {
+        var hits = buf[li2].match(gRe);
+        if (!hits) continue;
+        buf[li2] = buf[li2].replace(reS, replS);
+        nSub += reFlags.indexOf('g') >= 0 ? hits.length : 1;
+        nLines++;
+        cy = li2;
+      }
+      if (!nSub) {
+        undoStack.pop();
+        message = 'Pattern not found: ' + pat;
+      } else {
+        modified = true;
+        lastSearch = pat;
+        clampCursor(false);
+        message = nSub + ' substitution' + (nSub === 1 ? '' : 's') + ' on ' + nLines + ' line' + (nLines === 1 ? '' : 's');
+      }
+    }
     function execEx(cmd) {
       cmd = cmd.trim();
       if (cmd === '') return;
       if (/^\d+$/.test(cmd)) { cy = Math.min(buf.length - 1, Math.max(0, parseInt(cmd, 10) - 1)); cx = 0; return; }
+      var sm = /^([%$.]|\d+(?:,(?:\d+|\$|\.))?)?s([^A-Za-z0-9\s])([\s\S]*)$/.exec(cmd);
+      if (sm) { exSubstitute(sm[1], sm[2], sm[3]); return; }
       var m = /^w(q)?(!)?(?:\s+(.+))?$/.exec(cmd);
       if (m) { save(m[3] || null, !!m[1]); return; }
       if (cmd === 'x') { if (modified) save(null, true); else quit(0); return; }
@@ -3127,7 +4598,34 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   }
 
   function syncTyped() {
-    typed.textContent = input.value;
+    typed.textContent = (readline && readline.password) ? '' : input.value;
+  }
+
+  // Modal line reader used by ssh (host-key confirmation, password prompts).
+  // While active, Enter feeds the typed value to a callback instead of the
+  // shell; password mode hides the echo, exactly like OpenSSH.
+  var readline = null;
+  function promptRead(promptText, opts, cb) {
+    readline = { password: !!(opts && opts.password), cb: cb, text: promptText };
+    promptSpan.textContent = '';
+    promptSpan.appendChild(document.createTextNode(promptText));
+    input.disabled = false;
+    cursor.style.display = '';
+    inputLine.style.display = '';
+    input.value = '';
+    syncTyped();
+    input.focus();
+    scrollToBottom();
+  }
+  function finishReadline(value) {
+    var rl = readline;
+    readline = null;
+    addLine(rl.text + (rl.password || value === null ? '' : value));
+    input.value = '';
+    updatePrompt();
+    syncTyped();
+    rl.cb(value);
+    scrollToBottom();
   }
 
   function getCompletableCommands() {
@@ -3215,6 +4713,13 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   input.addEventListener('input', syncTyped);
 
   input.addEventListener('keydown', function(e) {
+    // Modal readline (ssh prompts) intercepts before everything else
+    if (readline) {
+      if (e.key === 'c' && e.ctrlKey) { e.preventDefault(); finishReadline(null); return; }
+      if (e.key === 'Enter') { e.preventDefault(); finishReadline(input.value); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Tab') { e.preventDefault(); return; }
+      return;   // let the character reach the input; the input event masks it
+    }
     // Ctrl+C: kill foreground process or cancel input
     if (e.key === 'c' && e.ctrlKey) {
       e.preventDefault();
