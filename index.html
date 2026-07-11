@@ -1218,7 +1218,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   function defineApplets(obj) { for (var k in obj) applets[k] = obj[k]; }
   // Applets that take over the screen / run in real time when started from an
   // interactive prompt (standalone, without stdout redirection).
-  var INTERACTIVE = { vi: true, sl: true, sleep: true, yes: true, ssh: true };
+  var INTERACTIVE = { vi: true, sl: true, sleep: true, yes: true, ssh: true, ping: true };
 
   function registerAppletBinaries() {
     var names = Object.keys(applets).sort();
@@ -3698,6 +3698,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     }
     if (name === 'vi') return launchVi(args, cont);
     if (name === 'sleep') return runSleep(args, cont);
+    if (name === 'ping') return runPing(args, cont);
     if (name === 'yes') return runYes(args, cont);
     if (name === 'ssh') return launchSsh(args, cont);
   }
@@ -4094,6 +4095,69 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       if (!interrupted && cont) cont();
     }
     document.addEventListener('keydown', keyHandler);
+    return 'async';
+  }
+
+  // ping at the tty: one packet per interval, reply after its RTT, Ctrl+C aborts with stats.
+  function runPing(args, cont) {
+    var count = null, host = null, interval = 1000;
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (a === '-c') count = parseInt(args[++i], 10);
+      else if (a === '-i') interval = Math.max(100, Math.min(60000, (parseFloat(args[++i]) || 1) * 1000));
+      else if (a === '-w' || a === '-W' || a === '-s') i++;
+      else if (a.charAt(0) !== '-') host = a;
+    }
+    if (!host) { addLine('ping: usage error: Destination address required'); lastExit = 1; return; }
+    var target = resolveHost(host);
+    if (!target && !isIP(host)) { addLine("ping: bad address '" + host + "'"); lastExit = 1; return; }
+    var ip = target ? target.ip : host;
+    var n = count && count > 0 ? Math.min(count, 20) : 4;
+    var pid = nextPid++;
+    var proc = { pid: pid, command: 'ping ' + args.join(' '), startTime: new Date(), status: 'running', jobId: null };
+    processes[pid] = proc;
+    foregroundPid = pid;
+    disableTerminalInput();
+    addLine('PING ' + host + ' (' + ip + '): 56 data bytes');
+    scrollToBottom();
+    var times = [], sent = 0, timer = null;
+    function sendNext() {
+      var seq = sent++;
+      var t = +(0.03 + Math.random() * (ip === '127.0.0.1' ? 0.05 : 8)).toFixed(3);
+      timer = setTimeout(function() {
+        times.push(t);
+        addLine('64 bytes from ' + ip + ': seq=' + seq + ' ttl=64 time=' + t.toFixed(3) + ' ms');
+        scrollToBottom();
+        if (sent >= n) { finish(false); return; }
+        timer = setTimeout(sendNext, Math.max(0, interval - t));
+      }, t);
+    }
+    function keyHandler(e) {
+      if (e.key === 'c' && e.ctrlKey) { e.preventDefault(); finish(true); }
+    }
+    function finish(interrupted) {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', keyHandler);
+      delete processes[pid];
+      if (foregroundPid === pid) foregroundPid = null;
+      if (interrupted) addLine('^C');
+      addLine('');
+      addLine('--- ' + host + ' ping statistics ---');
+      var loss = sent ? Math.round((sent - times.length) / sent * 100) : 0;
+      addLine(sent + ' packets transmitted, ' + times.length + ' packets received, ' + loss + '% packet loss');
+      if (times.length) {
+        var min = Math.min.apply(null, times), max = Math.max.apply(null, times);
+        var avg = times.reduce(function(x, y) { return x + y; }, 0) / times.length;
+        addLine('round-trip min/avg/max = ' + min.toFixed(3) + '/' + avg.toFixed(3) + '/' + max.toFixed(3) + ' ms');
+      }
+      lastExit = times.length ? 0 : 1;
+      enableTerminalInput();
+      updatePrompt();
+      scrollToBottom();
+      if (!interrupted && cont) cont();
+    }
+    document.addEventListener('keydown', keyHandler);
+    sendNext();
     return 'async';
   }
 
