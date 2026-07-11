@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript with no build system. The only dependency is Babylon.js, loaded from the jsdelivr CDN by `deerhunt.html` (version-pinned with an SRI integrity hash — update the hash when bumping the version).
+Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript with no build system. The only code dependency is Babylon.js (+ its glTF loaders plugin), loaded from the jsdelivr CDN by `deerhunt.html` (version-pinned with SRI integrity hashes — recompute the hashes when bumping the version). `assets/` holds CC0 3D models by Quaternius used by the game (sources listed in `assets/LICENSE.txt`); the deploy pipeline copies the whole directory.
 
 ## Development
 

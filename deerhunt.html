@@ -84,11 +84,15 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
   <div class="note">Chain kills for streak bonuses. Shoot the supply balloon for ammo and points.</div>
   <div class="note">The <b>golden deer</b> is legendary. Don't miss.</div>
   <div class="note" id="menu-best"></div>
-  <button id="start">&#9656; START HUNTING &#9666;</button>
+  <div class="note">Wildlife &amp; nature models by Quaternius (CC0)</div>
+  <button id="start" disabled>loading assets&hellip;</button>
 </div>
 <div id="err">Could not load the 3D engine (WebGL or CDN unavailable).<br>The deer live to see another day.</div>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@8.56.2/babylon.js"
         integrity="sha384-bJ7uvrJB0MXh1qhQouRHX/NbjOQywkt/ZxeFnrMiiFYG8InDFZlQdzVpAGaMhfwZ"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@8.56.2/babylonjs.loaders.min.js"
+        integrity="sha384-u+jmBF3Ig/827G8UT4kF+dDbuY0uXakBSGip6BUjiZ7IHqxA44vGxcpx76wGLI3f"
         crossorigin="anonymous"></script>
 <script>
 (function() {
@@ -137,14 +141,26 @@ function fbm(x, z) {
 // ── World shape ─────────────────────────────────────────────────────────
 const POND = { x: 85, z: -70, r: 30 };
 function pondClear(x, z, margin) { return Math.hypot(x - POND.x, z - POND.z) > POND.r + (margin || 4); }
-function terrainH(x, z) {
+function hillsAt(x, z) {
   const r = Math.hypot(x, z);
-  let h = fbm(x * 0.004 + 7, z * 0.004 + 3) * 16 + fbm(x * 0.025 + 2, z * 0.025 + 5) * 1.6;
-  h *= 0.3 + 0.7 * smooth(20, 150, r);
-  const rim = smooth(620, 1020, r);
-  h += rim * rim * 300 * (0.55 + 0.45 * fbm(x * 0.0012 + 9, z * 0.0012 + 9));
+  // rolling hills: broad swells + medium relief + fine detail
+  let h = fbm(x * 0.0016 + 21, z * 0.0016 + 13) * 38
+        + fbm(x * 0.004 + 7, z * 0.004 + 3) * 26
+        + fbm(x * 0.025 + 2, z * 0.025 + 5) * 2
+        - 31;
+  h *= 0.35 + 0.65 * smooth(15, 90, r);    // small flat glade at the stand
+  const rim = smooth(480, 950, r);
+  h += rim * rim * 340 * (0.55 + 0.45 * fbm(x * 0.0012 + 9, z * 0.0012 + 9));
+  return h;
+}
+const POND_LEVEL = hillsAt(POND.x, POND.z);
+function terrainH(x, z) {
+  let h = hillsAt(x, z);
   const pdx = x - POND.x, pdz = z - POND.z;
-  h -= 8 * Math.exp(-(pdx * pdx + pdz * pdz) / (POND.r * POND.r));
+  const pd = Math.sqrt(pdx * pdx + pdz * pdz);
+  // level the shore so the water sits naturally, then sink the basin
+  h = lerp(h, POND_LEVEL, smooth(POND.r * 2.2, POND.r * 0.9, pd));
+  h -= 8 * Math.exp(-(pd * pd) / (POND.r * POND.r));
   return h;
 }
 function forestDensity(x, z) {
@@ -412,35 +428,51 @@ for (let i = 0; i < 14; i++) {
   clouds.push(c);
 }
 
-// ── Terrain ─────────────────────────────────────────────────────────────
-const terrain = BABYLON.MeshBuilder.CreateGround('terrain', { width: 2200, height: 2200, subdivisions: 220, updatable: true }, scene);
-{
-  const pos = terrain.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-  const colors = new Float32Array(pos.length / 3 * 4);
+// ── Terrain (hand-built vertex data so the hills are guaranteed) ────────
+const terrain = (() => {
+  const SUB = 220, SIZE = 2200;
+  const positions = [], indices = [], colors = [];
   const cG1 = C3(pal.g1), cG2 = C3(pal.g2);
   const cRock = C3('#8B7BC8'), cSnow = C3('#F4F8FF'), cSand = C3('#E8D48A');
-  for (let i = 0; i < pos.length / 3; i++) {
-    const x = pos[i * 3], z = pos[i * 3 + 2];
-    const h = terrainH(x, z);
-    pos[i * 3 + 1] = h;
-    // playful two-tone grass patches
-    const n = fbm(x * 0.02 + 3, z * 0.02 + 8);
-    const tt = smooth(0.42, 0.58, n);
-    let r = lerp(cG2.r, cG1.r, tt);
-    let g = lerp(cG2.g, cG1.g, tt);
-    let b = lerp(cG2.b, cG1.b, tt);
-    if (h > 55) { const t = smooth(55, 110, h); r = lerp(r, cRock.r, t); g = lerp(g, cRock.g, t); b = lerp(b, cRock.b, t); }
-    if (h > 140) { const t = smooth(140, 200, h); r = lerp(r, cSnow.r, t); g = lerp(g, cSnow.g, t); b = lerp(b, cSnow.b, t); }
-    const pd = Math.hypot(x - POND.x, z - POND.z);
-    if (pd < POND.r + 5) { const t = 1 - smooth(POND.r - 2, POND.r + 5, pd); r = lerp(r, cSand.r, t); g = lerp(g, cSand.g, t); b = lerp(b, cSand.b, t); }
-    colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b; colors[i * 4 + 3] = 1;
+  for (let row = 0; row <= SUB; row++) {
+    for (let col = 0; col <= SUB; col++) {
+      const x = (col / SUB - 0.5) * SIZE;
+      const z = ((SUB - row) / SUB - 0.5) * SIZE;
+      const h = terrainH(x, z);
+      positions.push(x, h, z);
+      const n = fbm(x * 0.02 + 3, z * 0.02 + 8);
+      const tt = smooth(0.42, 0.58, n);
+      let r = lerp(cG2.r, cG1.r, tt);
+      let g = lerp(cG2.g, cG1.g, tt);
+      let b = lerp(cG2.b, cG1.b, tt);
+      if (h > 55) { const t = smooth(55, 110, h); r = lerp(r, cRock.r, t); g = lerp(g, cRock.g, t); b = lerp(b, cRock.b, t); }
+      if (h > 140) { const t = smooth(140, 200, h); r = lerp(r, cSnow.r, t); g = lerp(g, cSnow.g, t); b = lerp(b, cSnow.b, t); }
+      const pd = Math.hypot(x - POND.x, z - POND.z);
+      if (pd < POND.r + 5) { const t = 1 - smooth(POND.r - 2, POND.r + 5, pd); r = lerp(r, cSand.r, t); g = lerp(g, cSand.g, t); b = lerp(b, cSand.b, t); }
+      colors.push(r, g, b, 1);
+    }
   }
-  terrain.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos);
-  const norms = [];
-  BABYLON.VertexData.ComputeNormals(pos, terrain.getIndices(), norms);
-  terrain.updateVerticesData(BABYLON.VertexBuffer.NormalKind, norms);
-  terrain.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
-}
+  for (let row = 0; row < SUB; row++) {
+    for (let col = 0; col < SUB; col++) {
+      indices.push(col + 1 + (row + 1) * (SUB + 1));
+      indices.push(col + 1 + row * (SUB + 1));
+      indices.push(col + row * (SUB + 1));
+      indices.push(col + (row + 1) * (SUB + 1));
+      indices.push(col + 1 + (row + 1) * (SUB + 1));
+      indices.push(col + row * (SUB + 1));
+    }
+  }
+  const normals = [];
+  BABYLON.VertexData.ComputeNormals(positions, indices, normals);
+  const vd = new BABYLON.VertexData();
+  vd.positions = positions;
+  vd.indices = indices;
+  vd.normals = normals;
+  vd.colors = colors;
+  const mesh = new BABYLON.Mesh('terrain', scene);
+  vd.applyToMesh(mesh);
+  return mesh;
+})();
 const terrainMat = new BABYLON.StandardMaterial('terrainM', scene);
 terrainMat.diffuseColor = C3('#FFFFFF');
 terrainMat.specularColor = C3('#000000');
@@ -472,7 +504,7 @@ foamMat.specularColor = C3('#000000');
 foam.material = foamMat;
 foam.isPickable = false;
 
-// ── Vegetation (thin instances, chunky low-poly) ────────────────────────
+// ── Assets (Quaternius CC0 models, see assets/LICENSE.txt) ──────────────
 function flatMat(hex, emissive) {
   const m = new BABYLON.StandardMaterial('m' + hex, scene);
   m.diffuseColor = C3(hex);
@@ -480,151 +512,211 @@ function flatMat(hex, emissive) {
   if (emissive) m.emissiveColor = C3(hex).scale(emissive);
   return m;
 }
-function varyColor(hex, lumVar) {
-  const hsv = C3(hex).toHSV();
-  return BABYLON.Color3.FromHSV(
-    (hsv.r + (R() - 0.5) * 12 + 360) % 360,
-    clamp(hsv.g + (R() - 0.5) * 0.12, 0, 1),
-    clamp(hsv.b + (R() - 0.5) * (lumVar || 0.16), 0.05, 1));
+
+const ASSET_FILES = [
+  'deer_doe', 'deer_stag',
+  'pine_cluster', 'pine_snow', 'pine_autumn',
+  'birch', 'birch_snow', 'tree_1', 'tree_2', 'tree_autumn',
+  'bush', 'bush_berries', 'bush_snow',
+  'grass', 'grass_tall', 'flowers', 'mushroom',
+  'rock_1', 'rock_2', 'rock_3', 'rock_large', 'rock_snow',
+  'stump', 'log'
+];
+const LIB = {};   // name -> AssetContainer
+let worldReady = false;
+
+// convert glTF PBR materials to flat StandardMaterial so the models match
+// the stylized lighting of the rest of the scene
+function toStandard(cont) {
+  const map = new Map();
+  for (const mesh of cont.meshes) {
+    const pm = mesh.material;
+    if (!pm) continue;
+    let sm = map.get(pm);
+    if (!sm) {
+      sm = new BABYLON.StandardMaterial(pm.name + '_std', scene);
+      sm.diffuseColor = pm.albedoColor ? pm.albedoColor.toGammaSpace() : C3('#FFFFFF');
+      if (pm.albedoTexture) sm.diffuseTexture = pm.albedoTexture;
+      sm.specularColor = C3('#000000');
+      sm.backFaceCulling = false;
+      map.set(pm, sm);
+    }
+    mesh.material = sm;
+  }
 }
-function plant(mesh, spots, opts) {
+
+async function loadAssets() {
+  await Promise.all(ASSET_FILES.map(async name => {
+    const cont = await BABYLON.SceneLoader.LoadAssetContainerAsync('assets/', name + '.glb', scene);
+    toStandard(cont);
+    LIB[name] = cont;
+  }));
+}
+
+// ── Collision: solid trunks / rocks / stumps in a spatial hash grid ─────
+const obstacleGrid = new Map();
+function addObstacle(x, z, r) {
+  const key = Math.floor(x / 16) + ',' + Math.floor(z / 16);
+  let arr = obstacleGrid.get(key);
+  if (!arr) { arr = []; obstacleGrid.set(key, arr); }
+  arr.push({ x, z, r });
+}
+function collide(px, pz, pr) {
+  const cx = Math.floor(px / 16), cz = Math.floor(pz / 16);
+  for (let gx = cx - 1; gx <= cx + 1; gx++) {
+    for (let gz = cz - 1; gz <= cz + 1; gz++) {
+      const arr = obstacleGrid.get(gx + ',' + gz);
+      if (!arr) continue;
+      for (const o of arr) {
+        const dx = px - o.x, dz = pz - o.z;
+        const min = o.r + pr;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < min * min && d2 > 1e-6) {
+          const d = Math.sqrt(d2);
+          px = o.x + dx / d * min;
+          pz = o.z + dz / d * min;
+        }
+      }
+    }
+  }
+  return [px, pz];
+}
+
+function makeTransforms(spots, sMin, sMax, tilt) {
+  return spots.map(([x, z]) => ({
+    x, z,
+    s: lerp(sMin, sMax, R()),
+    sy: 0.9 + R() * 0.2,
+    rotY: R() * TAU,
+    tx: tilt ? (R() - 0.5) * tilt : 0,
+    tz: tilt ? (R() - 0.5) * tilt : 0
+  }));
+}
+
+// thin-instance every primitive of a loaded model with shared transforms
+function plantModel(name, transforms, opts) {
   const o = opts || {};
-  const n = spots.length;
-  const buf = new Float32Array(n * 16);
-  const col = new Float32Array(n * 4);
+  const cont = LIB[name];
+  cont.addAllToScene();
+  const root = cont.meshes[0];
+  root.computeWorldMatrix(true);
+  const hb = root.getHierarchyBoundingVectors(true);
+  const dims = hb.max.subtract(hb.min);
+  const ref = o.norm === 'max' ? Math.max(dims.x, dims.y, dims.z) : dims.y;
+  const baseScale = (o.height || 8) / Math.max(ref, 0.001);
+  const scaleM = BABYLON.Matrix.Scaling(baseScale, baseScale, baseScale);
   const q = new BABYLON.Quaternion();
-  for (let i = 0; i < n; i++) {
-    const [x, z] = spots[i];
-    const s = lerp(o.sMin || 1, o.sMax || 1, R());
-    BABYLON.Quaternion.FromEulerAnglesToRef(o.tilt ? (R() - 0.5) * o.tilt : 0, R() * TAU, o.tilt ? (R() - 0.5) * o.tilt : 0, q);
-    const m = BABYLON.Matrix.Compose(V3(s, s * (0.85 + R() * 0.3), s), q, V3(x, terrainH(x, z) + (o.yOff || 0) * s, z));
-    m.copyToArray(buf, i * 16);
-    const c = varyColor(o.color, o.lumVar);
-    col[i * 4] = c.r; col[i * 4 + 1] = c.g; col[i * 4 + 2] = c.b; col[i * 4 + 3] = 1;
+  const tmpOut = new BABYLON.Matrix();
+  for (const src of cont.meshes) {
+    if (!src.getTotalVertices || src.getTotalVertices() === 0) continue;
+    const local = src.computeWorldMatrix(true).clone();
+    const buf = new Float32Array(transforms.length * 16);
+    transforms.forEach((t, i) => {
+      BABYLON.Quaternion.FromEulerAnglesToRef(t.tx, t.rotY, t.tz, q);
+      const treeM = BABYLON.Matrix.Compose(V3(t.s, t.s * t.sy, t.s), q, V3(t.x, terrainH(t.x, t.z) + (o.yOff || 0) * t.s, t.z));
+      local.multiplyToRef(scaleM, tmpOut);
+      tmpOut.multiplyToRef(treeM, tmpOut);
+      tmpOut.copyToArray(buf, i * 16);
+    });
+    src.parent = null;
+    src.position.setAll(0);
+    src.rotationQuaternion = null;
+    src.rotation.setAll(0);
+    src.scaling.setAll(1);
+    src.thinInstanceSetBuffer('matrix', buf, 16, true);
+    src.isPickable = false;
+    if (o.shadow) shadowGen.addShadowCaster(src);
   }
-  const baseMat = new BABYLON.StandardMaterial('plantM', scene);
-  baseMat.diffuseColor = C3('#FFFFFF');
-  baseMat.specularColor = C3('#000000');
-  mesh.material = baseMat;
-  mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
-  mesh.thinInstanceSetBuffer('color', col, 4, true);
-  mesh.isPickable = false;
-  if (o.shadow) shadowGen.addShadowCaster(mesh);
-  return mesh;
+  if (o.collide) transforms.forEach(t => addObstacle(t.x, t.z, o.collide * t.s));
 }
-function mergeParts(parts) {
-  const m = BABYLON.Mesh.MergeMeshes(parts, true, true);
-  m.convertToFlatShadedMesh();
+
+function splitSpots(spots, n) {
+  const parts = [];
+  for (let i = 0; i < n; i++) parts.push([]);
+  spots.forEach((s, i) => parts[i % n].push(s));
+  return parts;
+}
+
+function buildVegetation() {
+  // per-season model sets (real month decides)
+  const conifers = seasonIdx === 0 ? ['pine_snow']
+                 : seasonIdx === 3 ? ['pine_cluster', 'pine_autumn']
+                 : ['pine_cluster'];
+  const leafy    = seasonIdx === 0 ? ['birch_snow']
+                 : seasonIdx === 3 ? ['tree_autumn', 'birch', 'tree_1']
+                 : ['birch', 'tree_1', 'tree_2'];
+  const bushes   = seasonIdx === 0 ? ['bush_snow'] : ['bush', 'bush_berries'];
+  const rocks    = seasonIdx === 0 ? ['rock_snow', 'rock_large'] : ['rock_1', 'rock_2', 'rock_3', 'rock_large'];
+
+  const coniferSpots = scatter(1500, 55, 880, (x, z) => R() < forestDensity(x, z))
+    .concat(scatter(12, 26, 150, () => R() < 0.6));
+  splitSpots(coniferSpots, conifers.length).forEach((spots, i) => {
+    const t = makeTransforms(spots, 0.6, 1.6);
+    plantModel(conifers[i], t, { height: 13, shadow: true, collide: 0.55 });
+  });
+
+  const leafySpots = scatter(900, 60, 780, (x, z) => R() < forestDensity(x, z) * 0.8)
+    .concat(scatter(10, 26, 150, () => R() < 0.5));
+  splitSpots(leafySpots, leafy.length).forEach((spots, i) => {
+    const t = makeTransforms(spots, 0.6, 1.5);
+    plantModel(leafy[i], t, { height: 9, shadow: true, collide: 0.4 });
+  });
+
+  const bushSpots = scatter(500, 40, 720, (x, z) => R() < 0.25 + forestDensity(x, z) * 0.6);
+  splitSpots(bushSpots, bushes.length).forEach((spots, i) => {
+    plantModel(bushes[i], makeTransforms(spots, 0.6, 1.6), { height: 1.5, shadow: true });
+  });
+
+  const rockSpots = scatter(240, 25, 820, () => true);
+  splitSpots(rockSpots, rocks.length).forEach((spots, i) => {
+    const big = rocks[i] === 'rock_large';
+    const t = makeTransforms(spots, big ? 0.7 : 0.5, big ? 1.8 : 1.6, 0.35);
+    plantModel(rocks[i], t, { height: big ? 3 : 1.4, norm: 'max', shadow: true });
+    t.forEach(tt => { if ((big ? 3 : 1.4) * tt.s > 1.2) addObstacle(tt.x, tt.z, (big ? 1.1 : 0.55) * tt.s); });
+  });
+
+  plantModel('stump', makeTransforms(scatter(90, 40, 600, (x, z) => R() < 0.15 + forestDensity(x, z) * 0.4), 0.7, 1.3),
+    { height: 0.9, shadow: true, collide: 0.5 });
+  plantModel('log', makeTransforms(scatter(80, 40, 650, (x, z) => R() < 0.15 + forestDensity(x, z) * 0.4), 0.7, 1.4),
+    { height: 2.4, norm: 'max', shadow: true, collide: 0.6 });
+
+  const grassSpots = scatter(seasonIdx === 0 ? 1800 : 4600, 4, 320, (x, z) => forestDensity(x, z) < 0.3);
+  const [g1, g2] = splitSpots(grassSpots, 2);
+  plantModel('grass', makeTransforms(g1, 0.6, 1.6), { height: 0.55 });
+  plantModel('grass_tall', makeTransforms(g2, 0.6, 1.5), { height: 0.9 });
+
+  if (seasonIdx === 1 || seasonIdx === 2) {
+    plantModel('flowers', makeTransforms(scatter(600, 6, 260, (x, z) => forestDensity(x, z) < 0.2), 0.7, 1.5), { height: 0.5 });
+  }
+  if (seasonIdx === 3) {
+    plantModel('mushroom', makeTransforms(scatter(140, 45, 500, (x, z) => forestDensity(x, z) > 0.15), 0.8, 1.6), { height: 0.35 });
+  }
+}
+
+// ── Deer (animated Quaternius models) ───────────────────────────────────
+const MAT_GOLD = (() => {
+  const m = flatMat('#FFD84A');
+  m.emissiveColor = C3('#6A4E06');
   return m;
-}
-const cone = (d, h, y, t) => {
-  const c = BABYLON.MeshBuilder.CreateCylinder('c', { diameterTop: 0.01, diameterBottom: d, height: h, tessellation: t || 7 }, scene);
-  c.position.y = y;
-  c.bakeCurrentTransformIntoVertices();
-  return c;
-};
-const cyl = (dTop, dBot, h, y, t) => {
-  const c = BABYLON.MeshBuilder.CreateCylinder('c', { diameterTop: dTop, diameterBottom: dBot, height: h, tessellation: t || 7 }, scene);
-  c.position.y = y;
-  c.bakeCurrentTransformIntoVertices();
-  return c;
-};
-const blob = (r, x, y, z) => {
-  const b = BABYLON.MeshBuilder.CreateIcoSphere('b', { radius: r, subdivisions: 1, flat: true }, scene);
-  b.position.set(x, y, z);
-  b.bakeCurrentTransformIntoVertices();
-  return b;
-};
-
-// fat spruces
-const spruceSpots = scatter(2200, 55, 880, (x, z) => R() < forestDensity(x, z))
-  .concat(scatter(12, 26, 150, () => R() < 0.6));
-plant(mergeParts([cone(7.4, 5.2, 4.4), cone(5.8, 4.6, 7.0), cone(4.0, 4.0, 9.5), cone(2.4, 3.2, 11.8)]),
-  spruceSpots, { sMin: 0.5, sMax: 1.7, color: pal.spruce, shadow: true });
-plant(cyl(0.5, 0.7, 3.6, 1.7), spruceSpots, { sMin: 0.5, sMax: 1.7, color: '#6B4A2E', lumVar: 0.08 });
-
-// lollipop trees
-const lolliSpots = scatter(620, 60, 800, (x, z) => R() < forestDensity(x, z) * 0.8)
-  .concat(scatter(10, 26, 150, () => R() < 0.5));
-plant(mergeParts([blob(2.9, 0, 6.4, 0), blob(1.9, 1.9, 5.2, 0.6), blob(1.7, -1.8, 5.5, -0.5)]),
-  lolliSpots, { sMin: 0.6, sMax: 1.6, color: pal.lolli, shadow: true });
-plant(cyl(0.55, 0.75, 4.6, 2.2), lolliSpots, { sMin: 0.6, sMax: 1.6, color: '#8A5A34', lumVar: 0.08 });
-
-// birches
-const birchSpots = scatter(420, 60, 720, (x, z) => R() < forestDensity(x, z) * 0.7);
-plant(mergeParts([blob(2.0, 0, 7.2, 0), blob(1.4, -1.2, 6.0, 0.4), blob(1.3, 1.2, 6.3, -0.4)]),
-  birchSpots, { sMin: 0.6, sMax: 1.4, color: pal.birch, shadow: true });
-plant(cyl(0.28, 0.4, 7.4, 3.5), birchSpots, { sMin: 0.6, sMax: 1.4, color: '#F2F0E8', lumVar: 0.05 });
-
-// bushes
-plant(mergeParts([blob(1.1, 0, 0.6, 0), blob(0.8, 0.9, 0.45, 0.3), blob(0.7, -0.8, 0.5, -0.3)]),
-  scatter(480, 40, 720, (x, z) => R() < 0.25 + forestDensity(x, z) * 0.6),
-  { sMin: 0.5, sMax: 1.5, color: pal.snow ? '#9FB8A8' : '#3E9A38', shadow: true });
-
-// boulders
-plant((() => { const b = blob(1.5, 0, 0.9, 0); b.convertToFlatShadedMesh(); return b; })(),
-  scatter(230, 25, 820, () => true),
-  { sMin: 0.35, sMax: 2.3, tilt: 0.6, color: pal.snow ? '#C8D2E0' : '#9BA8C0', lumVar: 0.14, shadow: true });
-
-// stumps
-plant(cyl(0.9, 1.05, 0.8, 0.4, 8),
-  scatter(90, 40, 600, (x, z) => R() < 0.15 + forestDensity(x, z) * 0.4),
-  { sMin: 0.6, sMax: 1.3, color: '#8A6238', lumVar: 0.08, shadow: true });
-
-// chunky grass: clusters of squashed pyramids
-const grassBlade2 = (() => { const c = cone(0.42, 0.85, 0.42, 4); c.position.set(0.3, 0, 0.14); c.bakeCurrentTransformIntoVertices(); return c; })();
-const grassBlade3 = (() => { const c = cone(0.4, 0.7, 0.35, 4); c.position.set(-0.28, 0, -0.12); c.bakeCurrentTransformIntoVertices(); return c; })();
-plant(mergeParts([cone(0.5, 1.0, 0.5, 4), grassBlade2, grassBlade3]),
-  scatter(5200, 4, 320, (x, z) => forestDensity(x, z) < 0.3),
-  { sMin: 0.5, sMax: 1.6, color: pal.snow ? '#E8EEF6' : pal.g2, lumVar: 0.18 });
-
-// flowers in spring/summer — white / pink / yellow / purple
-if (seasonIdx === 1 || seasonIdx === 2) {
-  const flowerHead = mergeParts([blob(0.16, 0, 0.55, 0), cyl(0.04, 0.05, 0.5, 0.25, 5)]);
-  const flowerSpots = scatter(520, 6, 240, (x, z) => forestDensity(x, z) < 0.2);
-  const n = flowerSpots.length;
-  const buf = new Float32Array(n * 16);
-  const col = new Float32Array(n * 4);
-  const q = BABYLON.Quaternion.Identity();
-  const opts = ['#FFF6F8', '#FF8ACD', '#FFD84A', '#B78AFF'];
-  for (let i = 0; i < n; i++) {
-    const [x, z] = flowerSpots[i];
-    const s = 0.7 + R() * 0.7;
-    BABYLON.Matrix.Compose(V3(s, s, s), q, V3(x, terrainH(x, z), z)).copyToArray(buf, i * 16);
-    const c = C3(opts[Math.floor(R() * opts.length)]);
-    col[i * 4] = c.r; col[i * 4 + 1] = c.g; col[i * 4 + 2] = c.b; col[i * 4 + 3] = 1;
-  }
-  const fMat = new BABYLON.StandardMaterial('flowerM', scene);
-  fMat.diffuseColor = C3('#FFFFFF');
-  fMat.specularColor = C3('#000000');
-  flowerHead.material = fMat;
-  flowerHead.thinInstanceSetBuffer('matrix', buf, 16, true);
-  flowerHead.thinInstanceSetBuffer('color', col, 4, true);
-  flowerHead.isPickable = false;
+})();
+const DEER_META = {};
+function measureDeer(name) {
+  const cont = LIB[name];
+  const inst = cont.instantiateModelsToScene(n => n, false, { doNotInstantiate: true });
+  const probe = new BABYLON.TransformNode('probe', scene);
+  inst.rootNodes.forEach(r => { r.parent = probe; });
+  probe.computeWorldMatrix(true);
+  const hb = probe.getHierarchyBoundingVectors(true);
+  DEER_META[name] = {
+    h: Math.max(hb.max.y - hb.min.y, 0.01),
+    len: Math.max(hb.max.x - hb.min.x, hb.max.z - hb.min.z, 0.01),
+    yMin: hb.min.y
+  };
+  inst.animationGroups.forEach(g => g.dispose());
+  inst.skeletons.forEach(s => s.dispose());
+  probe.dispose(false, false);
 }
 
-// mushrooms in autumn
-if (seasonIdx === 3) {
-  const shroomSpots = scatter(130, 45, 500, (x, z) => forestDensity(x, z) > 0.15);
-  plant(cyl(0.14, 0.18, 0.4, 0.2, 6), shroomSpots, { sMin: 0.7, sMax: 1.4, color: '#F2E8D8', lumVar: 0.05 });
-  plant((() => {
-    const c = BABYLON.MeshBuilder.CreateSphere('cap', { diameter: 0.55, segments: 4, slice: 0.5 }, scene);
-    c.position.y = 0.38;
-    c.bakeCurrentTransformIntoVertices();
-    return c;
-  })(), shroomSpots, { sMin: 0.7, sMax: 1.4, color: '#E84A34', lumVar: 0.06 });
-}
-
-// ── Deer materials ──────────────────────────────────────────────────────
-const MAT = {
-  doe: flatMat('#C98A54'), doeDark: flatMat('#8A5A34'), belly: flatMat('#F2E0C8'),
-  buck: flatMat('#9C6B3E'), buckDark: flatMat('#6A452A'),
-  gold: (() => { const m = flatMat('#FFD84A'); m.emissiveColor = C3('#8A6508'); return m; })(),
-  goldDark: (() => { const m = flatMat('#E8B830'); m.emissiveColor = C3('#6A4E06'); return m; })(),
-  dark: flatMat('#2A2226'), antler: flatMat('#E8D5A8'), nose: flatMat('#3A2E30')
-};
-
-// ── Deer (chunky, cute; harvest = confetti, no gore) ────────────────────
 const deerList = [];
 let spawnT = 2;
 function activity() {
@@ -632,70 +724,7 @@ function activity() {
   const gs = (x, s) => Math.exp(-x * x / (2 * s * s));
   return 0.25 + 0.9 * Math.max(gs(h - sun.sunrise - 0.6, 1.6), gs(h - sun.sunset + 0.6, 1.6));
 }
-function buildDeer(rarity) {
-  // rarity: 0 doe, 1 buck, 2 golden
-  const body = rarity === 2 ? MAT.gold : rarity === 1 ? MAT.buck : MAT.doe;
-  const dark = rarity === 2 ? MAT.goldDark : rarity === 1 ? MAT.buckDark : MAT.doeDark;
-  const root = new BABYLON.TransformNode('deer', scene);
-  const mk = (mesh, mat, zone) => {
-    mesh.material = mat;
-    mesh.parent = root;
-    mesh.metadata = { zone };
-    shadowGen.addShadowCaster(mesh);
-    return mesh;
-  };
-  const torso = mk(BABYLON.MeshBuilder.CreateBox('torso', { width: 0.52, height: 0.6, depth: 1.05 }, scene), body, 'body');
-  torso.position.y = 0.92;
-  const belly = mk(BABYLON.MeshBuilder.CreateBox('belly', { width: 0.54, height: 0.22, depth: 0.7 }, scene), MAT.belly, 'body');
-  belly.position.set(0, 0.72, -0.05);
-  const rump = mk(BABYLON.MeshBuilder.CreateBox('rump', { width: 0.5, height: 0.5, depth: 0.3 }, scene), MAT.belly, 'body');
-  rump.position.set(0, 0.98, -0.62);
-  const headPivot = new BABYLON.TransformNode('headPivot', scene);
-  headPivot.parent = root;
-  headPivot.position.set(0, 1.18, 0.5);
-  const head = mk(BABYLON.MeshBuilder.CreateBox('head', { width: 0.34, height: 0.36, depth: 0.4 }, scene), body, 'head');
-  head.parent = headPivot;
-  head.position.set(0, 0.28, 0.12);
-  const snout = mk(BABYLON.MeshBuilder.CreateBox('snout', { width: 0.2, height: 0.18, depth: 0.22 }, scene), dark, 'head');
-  snout.parent = headPivot;
-  snout.position.set(0, 0.22, 0.38);
-  const nose = mk(BABYLON.MeshBuilder.CreateBox('nose', { width: 0.1, height: 0.08, depth: 0.06 }, scene), MAT.nose, 'head');
-  nose.parent = headPivot;
-  nose.position.set(0, 0.24, 0.5);
-  for (const sgn of [-1, 1]) {
-    const eye = mk(BABYLON.MeshBuilder.CreateSphere('eye', { diameter: 0.09, segments: 4 }, scene), MAT.dark, 'head');
-    eye.parent = headPivot;
-    eye.position.set(sgn * 0.15, 0.32, 0.3);
-    const ear = mk(BABYLON.MeshBuilder.CreateCylinder('ear', { diameterTop: 0.02, diameterBottom: 0.14, height: 0.28, tessellation: 5 }, scene), dark, 'head');
-    ear.parent = headPivot;
-    ear.position.set(sgn * 0.16, 0.52, 0.02);
-    ear.rotation.z = -sgn * 0.4;
-    if (rarity >= 1) {
-      const beam = mk(BABYLON.MeshBuilder.CreateBox('antler', { width: 0.05, height: 0.42, depth: 0.05 }, scene), MAT.antler, 'head');
-      beam.parent = headPivot;
-      beam.position.set(sgn * 0.12, 0.68, 0);
-      beam.rotation.z = -sgn * 0.25;
-      const tine = mk(BABYLON.MeshBuilder.CreateBox('tine', { width: 0.26, height: 0.05, depth: 0.05 }, scene), MAT.antler, 'head');
-      tine.parent = headPivot;
-      tine.position.set(sgn * 0.2, 0.74, 0);
-    }
-  }
-  const legs = [];
-  const hipPos = [[0.17, 0.32], [-0.17, 0.32], [0.17, -0.4], [-0.17, -0.4]];
-  for (let i = 0; i < 4; i++) {
-    const hip = new BABYLON.TransformNode('hip', scene);
-    hip.parent = root;
-    hip.position.set(hipPos[i][0], 0.68, hipPos[i][1]);
-    const leg = mk(BABYLON.MeshBuilder.CreateCylinder('leg', { diameterTop: 0.14, diameterBottom: 0.1, height: 0.72, tessellation: 6 }, scene), dark, 'leg');
-    leg.parent = hip;
-    leg.position.y = -0.34;
-    legs.push(hip);
-  }
-  const tail = mk(BABYLON.MeshBuilder.CreateBox('tail', { width: 0.14, height: 0.2, depth: 0.1 }, scene), MAT.belly, 'body');
-  tail.parent = root;
-  tail.position.set(0, 1.14, -0.82);
-  return { root, headPivot, legs, tail };
-}
+
 function spawnDeer(anywhere) {
   let a, r, x, z, tries = 0;
   do {
@@ -705,24 +734,85 @@ function spawnDeer(anywhere) {
   } while (!pondClear(x, z, 8) && ++tries < 12);
   const roll = Math.random();
   const rarity = roll < 0.05 ? 2 : roll < 0.4 ? 1 : 0;
-  const parts = buildDeer(rarity);
-  const size = (0.95 + Math.random() * 0.25) * (rarity === 1 ? 1.15 : 1);
-  parts.root.scaling.setAll(size);
+  const modelName = rarity >= 1 ? 'deer_stag' : 'deer_doe';
+  const meta = DEER_META[modelName];
+  const inst = LIB[modelName].instantiateModelsToScene(n => n, false, { doNotInstantiate: true });
+
+  const root = new BABYLON.TransformNode('deer', scene);
+  const bodyNode = new BABYLON.TransformNode('deerBody', scene);
+  bodyNode.parent = root;
+  bodyNode.rotation.y = Math.PI;              // glTF forward → our +Z forward
+  bodyNode.position.y = -meta.yMin;
+  inst.rootNodes.forEach(rn => { rn.parent = bodyNode; });
+
+  const targetH = rarity >= 1 ? 1.75 : 1.45;
+  const size = 0.95 + Math.random() * 0.25;
+  const baseScale = (targetH / meta.h) * size;
+  root.scaling.setAll(baseScale);
+
+  // invisible hit boxes (stable regardless of animation pose)
+  const H = meta.h, L = meta.len;
+  const boxes = [];
+  const hbox = (w, hh, dpt, px, py, pz, zone) => {
+    const b = BABYLON.MeshBuilder.CreateBox('hb', { width: w, height: hh, depth: dpt }, scene);
+    b.parent = root;
+    b.position.set(px, py, pz);
+    b.isVisible = false;
+    b.metadata = { zone };
+    boxes.push(b);
+    return b;
+  };
+  hbox(0.36 * H, 0.42 * H, 0.62 * L, 0, 0.62 * H, -0.05 * L, 'body');
+  hbox(0.26 * H, 0.34 * H, 0.32 * L, 0, 0.88 * H, 0.36 * L, 'head');
+  hbox(0.30 * H, 0.42 * H, 0.55 * L, 0, 0.20 * H, -0.02 * L, 'leg');
+
+  // animations (names like "Idle", "Walk", "Gallop", "Eating")
+  const groups = inst.animationGroups;
+  groups.forEach(g => g.stop());
+  const pickA = (...keys) => {
+    for (const k of keys) {
+      const g = groups.find(g => g.name.toLowerCase().endsWith(k));
+      if (g) return g;
+    }
+    return groups[0] || null;
+  };
+  const anims = {
+    idle: pickA('idle'),
+    eating: pickA('eating', 'idle_headlow', 'idle'),
+    walk: pickA('walk'),
+    gallop: pickA('gallop', 'walk')
+  };
+
   const d = {
-    root: parts.root, headPivot: parts.headPivot, legs: parts.legs, tail: parts.tail,
-    rarity, size,
+    root, rarity, baseScale,
     x, z, heading: Math.random() * TAU,
     state: anywhere ? 'graze' : 'walk', t: 3 + Math.random() * 6,
-    phase: Math.random() * TAU, g: 0, dist: 999,
-    wounded: false, woundT: 0, sparkle: null
+    dist: 999, wounded: false, woundT: 0, sparkle: null,
+    vitalZ: 0.1 * L * baseScale,
+    anims, groups, skeletons: inst.skeletons, animKey: '', curG: null,
+    play(k) {
+      if (this.animKey === k) return;
+      const g = this.anims[k];
+      if (!g) return;
+      if (this.curG) this.curG.stop();
+      g.start(true, k === 'gallop' ? 1.25 : 1.0);
+      this.curG = g;
+      this.animKey = k;
+    }
   };
-  parts.root.getChildMeshes().forEach(m => { if (m.metadata) m.metadata.deer = d; });
+  root.metadata = { deer: d };
+  boxes.forEach(b => { b.metadata.deer = d; });
+  root.getChildMeshes().forEach(m => { if (m.isVisible) shadowGen.addShadowCaster(m); });
+
   if (rarity === 2) {
-    d.sparkle = sparkleSystem(parts.root);
+    root.getChildMeshes().forEach(m => { if (m.isVisible) m.material = MAT_GOLD; });
+    d.sparkle = sparkleSystem(root);
     if (state === 'play') msg('✨ A legendary golden deer has appeared!');
   }
+  d.play(d.state === 'graze' ? 'eating' : 'walk');
   deerList.push(d);
 }
+
 function fleeDeer(d, fromX, fromZ) {
   if (d.state === 'gone') return;
   d.state = 'flee';
@@ -731,15 +821,17 @@ function fleeDeer(d, fromX, fromZ) {
 }
 function despawnDeer(d) {
   if (d.sparkle) { d.sparkle.stop(); d.sparkle.dispose(); }
+  d.groups.forEach(g => g.dispose());
+  d.skeletons.forEach(s => s.dispose());
   d.root.getChildMeshes().forEach(m => shadowGen.removeShadowCaster(m));
-  d.root.dispose(false, false); // materials are shared between deer — keep them
+  d.root.dispose(false, false); // materials are shared with the asset library
   const i = deerList.indexOf(d);
   if (i !== -1) deerList.splice(i, 1);
 }
 const killFx = [];
 function harvestDeer(d) {
   d.state = 'gone';
-  if (d.sparkle) { d.sparkle.stop(); }
+  if (d.sparkle) d.sparkle.stop();
   confetti(V3(d.x, terrainH(d.x, d.z) + 1, d.z), d.rarity === 2);
   killFx.push({ d, t: 0 });
 }
@@ -755,7 +847,6 @@ function updateDeer(dt) {
     if (d.state === 'gone') continue;
     d.t -= dt;
     d.dist = Math.hypot(d.x - player.x, d.z - player.z);
-    d.g += ((d.state === 'graze' ? 1 : 0) - d.g) * Math.min(1, dt * 4);
 
     if (d.state !== 'flee') {
       if (d.dist < 22) fleeDeer(d, player.x, player.z);
@@ -784,7 +875,7 @@ function updateDeer(dt) {
         if (d.t <= 0) { d.state = 'graze'; d.t = 3 + Math.random() * 5; }
         break;
       case 'flee': {
-        const spd = d.rarity === 2 ? 12 : 9;
+        const spd = d.rarity === 2 ? 13 : 9.5;
         d.x += Math.sin(d.heading) * spd * dt;
         d.z += Math.cos(d.heading) * spd * dt;
         if (d.wounded) {
@@ -795,14 +886,8 @@ function updateDeer(dt) {
         break;
       }
     }
-    d.phase += dt * (d.state === 'flee' ? 13 : d.state === 'walk' ? 6 : 0.8);
-    const amp = d.state === 'flee' ? 0.9 : d.state === 'walk' ? 0.5 : 0.03;
-    const offs = [0, Math.PI, Math.PI, 0];
-    d.legs.forEach((hip, li) => { hip.rotation.x = Math.sin(d.phase + offs[li]) * amp; });
-    d.headPivot.rotation.x = lerp(d.state === 'alert' ? -0.25 : 0, 1.1, d.g);
-    d.tail.rotation.x = d.state === 'flee' ? -0.9 : -0.2;
-    const hop = d.state === 'flee' ? Math.abs(Math.sin(d.phase * 0.5)) * 0.35 : 0;
-    d.root.position.set(d.x, terrainH(d.x, d.z) + hop, d.z);
+    d.play(d.state === 'flee' ? 'gallop' : d.state === 'walk' ? 'walk' : d.state === 'graze' ? 'eating' : 'idle');
+    d.root.position.set(d.x, terrainH(d.x, d.z), d.z);
     d.root.rotation.y = d.heading;
   }
   // harvest animation: spin up, shrink, vanish in confetti
@@ -813,7 +898,7 @@ function updateDeer(dt) {
     if (p >= 1) { despawnDeer(k.d); killFx.splice(i, 1); continue; }
     k.d.root.rotation.y += dt * 14;
     k.d.root.position.y += dt * 3.5 * (1 - p);
-    k.d.root.scaling.setAll(k.d.size * Math.max(0.05, 1 - p * p));
+    k.d.root.scaling.setAll(k.d.baseScale * Math.max(0.05, 1 - p * p));
   }
 }
 
@@ -1102,6 +1187,7 @@ function bumpScore(pts) {
 }
 
 function startHunt() {
+  if (!worldReady) return;
   initAudio();
   if (AC && AC.state === 'suspended') AC.resume();
   state = 'play';
@@ -1270,7 +1356,7 @@ function fire() {
     if (zone === 'head') zMult = 2;
     else if (zone === 'body') {
       const localZ = (impact.x - hitDeer.x) * Math.sin(hitDeer.heading) + (impact.z - hitDeer.z) * Math.cos(hitDeer.heading);
-      if (localZ > 0.12) { zone = 'vital'; zMult = 1.5; }
+      if (localZ > hitDeer.vitalZ) { zone = 'vital'; zMult = 1.5; }
     }
     const rarityMult = hitDeer.rarity === 2 ? 5 : hitDeer.rarity === 1 ? 2 : 1;
     hitMarkT = 0.25;
@@ -1516,10 +1602,24 @@ function drawOverlay() {
 pickWeather();
 wx.cloud = wx.tc; wx.fog = wx.tf; wx.precip = wx.tp; wx.wind = wx.tw;
 computeSun(now0);
-for (let i = 0; i < 3; i++) spawnDeer(true);
 el('menu-season').textContent =
   SEASON_NAMES[seasonIdx] + ' · sunrise ' + fmtH(sun.sunrise) + ' · sunset ' + fmtH(sun.sunset);
 el('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
+
+loadAssets().then(() => {
+  buildVegetation();
+  measureDeer('deer_doe');
+  measureDeer('deer_stag');
+  for (let i = 0; i < 3; i++) spawnDeer(true);
+  worldReady = true;
+  const btn = el('start');
+  btn.disabled = false;
+  btn.innerHTML = '&#9656; START HUNTING &#9666;';
+}).catch(e => {
+  console.error(e);
+  const btn = el('start');
+  btn.textContent = 'failed to load assets — reload to retry';
+});
 
 let lastT = performance.now();
 engine.runRenderLoop(() => {
@@ -1549,6 +1649,8 @@ engine.runRenderLoop(() => {
       player.z += (fwdZ * fx + rgtZ * fz) / len * spd * dt;
       const pr = Math.hypot(player.x, player.z);
       if (pr > 620) { player.x *= 620 / pr; player.z *= 620 / pr; }
+      const cc = collide(player.x, player.z, 0.5);
+      player.x = cc[0]; player.z = cc[1];
       bobT += dt * 8;
     }
     player.y = terrainH(player.x, player.z) + 1.7 + Math.sin(bobT) * 0.05 * (playerMoving ? 1 : 0);
@@ -1596,7 +1698,7 @@ engine.runRenderLoop(() => {
   camera.rotation.set(player.pitch + swPitch, player.yaw + swYaw, 0);
 
   updateSky();
-  if (state === 'play') { updateDeer(dt); updateCrate(dt, elapsed); }
+  if (state === 'play' && worldReady) { updateDeer(dt); updateCrate(dt, elapsed); }
 
   // precipitation follows the hunter
   camAnchor.copyFrom(camera.position);

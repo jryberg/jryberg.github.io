@@ -1,0 +1,33 @@
+3D models in this directory
+===========================
+
+All models by Quaternius (https://quaternius.com), licensed CC0 1.0
+(public domain, no attribution required — credited anyway because
+they're great): https://creativecommons.org/publicdomain/zero/1.0/
+
+Downloaded via poly.pizza:
+
+  deer_doe.glb      https://poly.pizza/m/T6Cs7tmMHJ   "Deer" (animated)
+  deer_stag.glb     https://poly.pizza/m/tQdzbZ1Cmw   "Stag" (animated)
+  pine_cluster.glb  https://poly.pizza/m/oYtDty0fR6   "Pine Trees"
+  pine_snow.glb     https://poly.pizza/m/17vQv2X5rh   "Pine Tree with Snow"
+  pine_autumn.glb   https://poly.pizza/m/n0X3N2yUFL   "Pine Tree Autumn"
+  birch.glb         https://poly.pizza/m/k6cozoNfLH   "Birch Tree"
+  birch_snow.glb    https://poly.pizza/m/R4NgnzZHcK   "Birch Tree with Snow"
+  tree_1.glb        https://poly.pizza/m/2paAm1ja4w   "Tree"
+  tree_2.glb        https://poly.pizza/m/i4QMw4L64D   "Tree"
+  tree_autumn.glb   https://poly.pizza/m/2lRubrT6Na   "Autumn Tree"
+  bush.glb          https://poly.pizza/m/92EytlU1El   "Bush"
+  bush_berries.glb  https://poly.pizza/m/TSbIxkDtxF   "Bush with Berries"
+  bush_snow.glb     https://poly.pizza/m/H4IEAwYl1z   "Bush Snow"
+  grass.glb         https://poly.pizza/m/iw6l7gqcdQ   "Grass"
+  grass_tall.glb    https://poly.pizza/m/JSIYtscPmP   "Tall Grass"
+  flowers.glb       https://poly.pizza/m/dOO6kMDd8L   "Flowers"
+  mushroom.glb      https://poly.pizza/m/db1tjMhmiA   "Mushroom"
+  rock_1.glb        https://poly.pizza/m/RtLRqYjfMs   "Rock"
+  rock_2.glb        https://poly.pizza/m/4MUaQTcDdc   "Rock"
+  rock_3.glb        https://poly.pizza/m/Z6M4GNkgWt   "Rock"
+  rock_large.glb    https://poly.pizza/m/54jZKTAt5p   "Rock Large"
+  rock_snow.glb     https://poly.pizza/m/eZRzCg5BcR   "Rock Snow"
+  stump.glb         https://poly.pizza/m/nFvEbUX6LE   "Tree Stump with Moss"
+  log.glb           https://poly.pizza/m/nwsYvcI0bC   "Wood Log with Moss"
