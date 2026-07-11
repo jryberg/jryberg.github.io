@@ -51,8 +51,9 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     '/home/guest/Documents': { type: 'dir', children: [], owner: 'guest', group: 'guest', mode: 'drwxr-xr-x' },
     '/etc': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
     '/usr': { type: 'dir', children: ['bin'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
-    '/usr/bin': { type: 'dir', children: ['clock', 'floppy'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
+    '/usr/bin': { type: 'dir', children: ['clock', 'deerhunt', 'floppy'], owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
     '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
+    '/usr/bin/deerhunt': { type: 'file', content: '', executable: true, xapp: true, src: 'deerhunt.html', windowTitle: 'Deer Hunt', winW: 1024, winH: 720, owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
     '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy', owner: 'root', group: 'root', mode: '-rwxr-xr-x' },
     '/var': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxr-xr-x' },
     '/tmp': { type: 'dir', restricted: true, owner: 'root', group: 'root', mode: 'drwxrwxrwt' }
@@ -202,8 +203,8 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     var win = document.createElement('div');
     win.className = 'x11-window';
     win.dataset.pid = pid;
-    var w = Math.min(640, window.innerWidth - 40);
-    var h = Math.min(520, window.innerHeight - 40);
+    var w = Math.min(fileMeta.winW || 640, window.innerWidth - 40);
+    var h = Math.min(fileMeta.winH || 520, window.innerHeight - 40);
     var offsetX = (Math.random() - 0.5) * 60;
     var offsetY = (Math.random() - 0.5) * 60;
     win.style.width = w + 'px';
@@ -237,6 +238,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     body.className = 'x11-body';
     var iframe = document.createElement('iframe');
     iframe.src = fileMeta.src;
+    iframe.allow = 'pointer-lock; fullscreen';
     body.appendChild(iframe);
 
     win.appendChild(titlebar);
@@ -720,7 +722,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       for (var i = 0; i < lines.length; i++) lines[i].remove();
     },
     help: function() {
-      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, man, clock, floppy, help, exit');
+      addLine('Available commands: ls, cat, cd, pwd, whoami, hostname, id, uname, clear, echo, date, history, ps, kill, jobs, sl, man, clock, floppy, deerhunt, help, exit');
     },
     echo: function(args) { addLine(args.join(' ')); },
     date: function() { addLine(formatDate(new Date())); },
@@ -801,6 +803,39 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
         addLine('       Toyoda Masashi (mtoyoda@acm.org)');
         addLine('');
         addLine('                            March 31, 2014                            SL(1)');
+      } else if (page === 'deerhunt') {
+        addLine('DEERHUNT(6)                    Games Manual                    DEERHUNT(6)');
+        addLine('');
+        addLine('NAME');
+        addLine('       deerhunt - deer hunting simulator for X11');
+        addLine('');
+        addLine('SYNOPSIS');
+        addLine('       deerhunt [&]');
+        addLine('');
+        addLine('DESCRIPTION');
+        addLine('       A real-time 3D hunting simulator. The position of the sun, the');
+        addLine('       season and the length of the day follow the system clock, and');
+        addLine('       the weather rolls in on its own: fog, rain, thunderstorms, and');
+        addLine('       snow when it is cold enough.');
+        addLine('');
+        addLine('CONTROLS');
+        addLine('       mouse        look around');
+        addLine('       w a s d      walk');
+        addLine('       left btn     fire');
+        addLine('       right btn    look through the scope');
+        addLine('       space        hold breath (steadies the scope)');
+        addLine('       1 2 3        choose rifle');
+        addLine('       r            reload');
+        addLine('       m            sound on/off');
+        addLine('');
+        addLine('NOTES');
+        addLine('       Deer are most active at dawn and dusk. Compensate for wind and');
+        addLine('       bullet drop at long range; a steady breath helps.');
+        addLine('');
+        addLine('BUGS');
+        addLine('       The deer are procedural and hold no grudge.');
+        addLine('');
+        addLine('                              July 11, 2026                   DEERHUNT(6)');
       } else {
         addLine('No manual entry for ' + page);
       }

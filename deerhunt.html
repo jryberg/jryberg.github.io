@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deer Hunt</title>
+<style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace; }
+canvas { display: block; }
+#gl { position: fixed; inset: 0; cursor: none; }
+#overlay { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #d8e6d8; font-size: 13px; }
+.panel { position: absolute; background: rgba(8,10,10,0.62); border: 1px solid rgba(87,196,87,0.25); border-radius: 6px; padding: 8px 12px; line-height: 1.5; }
+#p-left { top: 10px; left: 10px; min-width: 200px; }
+#p-right { top: 10px; right: 10px; text-align: right; }
+#p-rifle { bottom: 12px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 300px; }
+#clock { font-size: 22px; font-weight: bold; }
+.dim { color: #9ab89a; }
+#score { font-size: 17px; font-weight: bold; }
+#ammo { font-size: 15px; letter-spacing: 3px; color: #57c457; }
+#ammo.empty { color: #c46a57; }
+#rhint { font-size: 11px; color: #9ab89a; min-height: 14px; }
+#msgs { position: absolute; top: 16%; left: 0; right: 0; text-align: center; }
+.msg { font-size: 15px; font-weight: bold; color: #e8e4d8; text-shadow: 0 1px 4px #000, 0 0 12px rgba(0,0,0,0.9); margin: 3px 0; animation: msgfade 4.5s forwards; }
+@keyframes msgfade { 0% { opacity: 0; transform: translateY(-6px); } 6% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
+#menu { position: fixed; inset: 0; z-index: 20; background: rgba(4,7,5,0.78); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #d8d4c8; }
+#menu.hidden { display: none; }
+#menu h1 { font-size: 52px; letter-spacing: 6px; color: #e8e4d8; margin: 0 0 6px; }
+#menu .sub { color: #57c457; margin-bottom: 28px; font-size: 14px; }
+#menu table { border-collapse: collapse; margin-bottom: 24px; font-size: 13px; }
+#menu td { padding: 3px 12px; }
+#menu td:first-child { text-align: right; color: #9ab89a; }
+#menu .note { color: #9ab89a; font-size: 12px; margin-bottom: 4px; }
+#start { margin-top: 22px; background: rgba(87,196,87,0.12); color: #e8e4d8; border: 1px solid #57c457; border-radius: 6px; font: inherit; font-size: 17px; font-weight: bold; padding: 10px 34px; cursor: pointer; }
+#start:hover { background: rgba(87,196,87,0.28); }
+#err { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; color: #c46a57; background: #0a0a0a; font-size: 14px; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="overlay"></canvas>
+<div id="hud" style="display:none">
+  <div class="panel" id="p-left">
+    <div id="clock">--:--:--</div>
+    <div class="dim" id="wline"></div>
+    <div class="dim" id="wline2"></div>
+  </div>
+  <div class="panel" id="p-right">
+    <div id="score">SCORE 0</div>
+    <div class="dim" id="stats"></div>
+  </div>
+  <div class="panel" id="p-rifle">
+    <div id="rname"></div>
+    <div id="ammo"></div>
+    <div id="rhint"></div>
+  </div>
+  <div id="msgs"></div>
+</div>
+<div id="menu">
+  <h1>DEER HUNT</h1>
+  <div class="sub">securit.se wilderness &middot; real time &middot; real weather</div>
+  <table>
+    <tr><td>mouse</td><td>look around</td></tr>
+    <tr><td>W A S D</td><td>walk</td></tr>
+    <tr><td>left button</td><td>fire</td></tr>
+    <tr><td>right button</td><td>look through the scope</td></tr>
+    <tr><td>hold space</td><td>hold breath (steadies the scope)</td></tr>
+    <tr><td>1 / 2 / 3</td><td>choose rifle</td></tr>
+    <tr><td>R</td><td>reload</td></tr>
+    <tr><td>M</td><td>sound on / off</td></tr>
+    <tr><td>esc</td><td>back to this menu</td></tr>
+  </table>
+  <div class="note" id="menu-season"></div>
+  <div class="note">Deer are most active at dawn and dusk. Mind the wind and the bullet drop.</div>
+  <div class="note" id="menu-best"></div>
+  <button id="start">&#9656; start hunting &#9666;</button>
+</div>
+<div id="err">WebGL is not available in this browser, so the hunt is off.<br>The deer live to see another day.</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ── Utils ───────────────────────────────────────────────────────────────
+const TAU = Math.PI * 2;
+const clamp = (x, a, b) => x < a ? a : (x > b ? b : x);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const R = mulberry32(20260711);
+
+// Value-noise fbm used for terrain and forest distribution
+function hash2(ix, iz) {
+  let n = ix * 374761393 + iz * 668265263 + 1013904223;
+  n = (n ^ (n >> 13)) * 1274126177;
+  return ((n ^ (n >> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash2(ix, iz), b = hash2(ix + 1, iz), c = hash2(ix, iz + 1), d = hash2(ix + 1, iz + 1);
+  return lerp(lerp(a, b, sx), lerp(c, d, sx), sz);
+}
+function fbm(x, z) {
+  let v = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < 4; i++) { v += amp * vnoise(x * f, z * f); amp *= 0.5; f *= 2.1; }
+  return v;
+}
+
+// ── World / terrain shape ───────────────────────────────────────────────
+const WORLD_R = 1100;
+function terrainH(x, z) {
+  const r = Math.hypot(x, z);
+  let h = fbm(x * 0.004 + 7, z * 0.004 + 3) * 16 + fbm(x * 0.025 + 2, z * 0.025 + 5) * 1.6;
+  h *= 0.3 + 0.7 * smooth(20, 150, r);           // flat glade around the stand
+  const rim = smooth(620, 1020, r);
+  h += rim * rim * 300 * (0.55 + 0.45 * fbm(x * 0.0012 + 9, z * 0.0012 + 9));
+  return h;
+}
+function forestDensity(x, z) {
+  const r = Math.hypot(x, z);
+  const ring = smooth(70, 200, r) * (1 - smooth(680, 900, r));
+  return ring * smooth(0.36, 0.62, fbm(x * 0.006 + 5, z * 0.006 + 11));
+}
+
+// ── Seasons (by real month) ─────────────────────────────────────────────
+const now0 = new Date();
+function seasonOf(m) { return (m === 11 || m <= 2) ? 0 : m <= 4 ? 1 : m <= 7 ? 2 : 3; }
+const seasonIdx = seasonOf(now0.getMonth());
+const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
+const PAL = [
+  { grass: 0xdfe4ea, grassLo: 0xb8c0cc, birch: 0x6b5a48, birchScale: 0.45, coat: 0x7e7060, snow: true },
+  { grass: 0x6f9a4a, grassLo: 0x4d7038, birch: 0x82a854, birchScale: 1.0, coat: 0x8e6c4a, snow: false },
+  { grass: 0x558238, grassLo: 0x3c642c, birch: 0x5c8c46, birchScale: 1.0, coat: 0x946e48, snow: false },
+  { grass: 0x8a6f38, grassLo: 0x6a542c, birch: 0xd08c2c, birchScale: 0.9, coat: 0x86684c, snow: false }
+];
+const pal = PAL[seasonIdx];
+
+// ── Sun / time ──────────────────────────────────────────────────────────
+const sun = { alt: 0.5, dayT: 0.5, nightT: 0, sunrise: 6, sunset: 20, doy: 0, hours: 12 };
+function computeSun(now) {
+  const start = new Date(now.getFullYear(), 0, 0);
+  sun.doy = Math.floor((now - start) / 86400000);
+  sun.hours = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const daylen = 12.2 + 5.6 * Math.sin((sun.doy - 81) / 365 * TAU);
+  sun.sunrise = 12.4 - daylen / 2;
+  sun.sunset = 12.4 + daylen / 2;
+  const h = sun.hours;
+  if (h >= sun.sunrise && h <= sun.sunset) {
+    sun.dayT = (h - sun.sunrise) / daylen;
+    sun.alt = Math.sin(Math.PI * sun.dayT);
+    sun.nightT = 0;
+  } else {
+    const nightlen = 24 - daylen;
+    const hn = h < sun.sunrise ? h + 24 - sun.sunset : h - sun.sunset;
+    sun.nightT = hn / nightlen;
+    sun.alt = -Math.sin(Math.PI * sun.nightT) * 0.7;
+  }
+}
+function fmtH(h) {
+  const hh = Math.floor(((h % 24) + 24) % 24), mm = Math.floor((h - Math.floor(h)) * 60);
+  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+}
+
+// ── Weather ─────────────────────────────────────────────────────────────
+const wx = { cloud: 0.25, fog: 0.05, precip: 0, wind: 2, windDir: 0, tc: 0.25, tf: 0.05, tp: 0, tw: 2, timer: 1 };
+function pickWeather() {
+  const r = Math.random();
+  if (r < 0.30)      { wx.tc = 0.05 + Math.random() * 0.2; wx.tf = 0;    wx.tp = 0; }
+  else if (r < 0.50) { wx.tc = 0.35 + Math.random() * 0.3; wx.tf = 0.04; wx.tp = 0; }
+  else if (r < 0.65) { wx.tc = 0.8 + Math.random() * 0.2;  wx.tf = 0.1;  wx.tp = 0; }
+  else if (r < 0.75) { wx.tc = 0.5 + Math.random() * 0.3;  wx.tf = 0.55 + Math.random() * 0.4; wx.tp = 0; }
+  else if (r < 0.90) { wx.tc = 0.85; wx.tf = 0.18; wx.tp = 0.25 + Math.random() * 0.3; }
+  else if (r < 0.97) { wx.tc = 0.95; wx.tf = 0.25; wx.tp = 0.55 + Math.random() * 0.25; }
+  else               { wx.tc = 1.0;  wx.tf = 0.3;  wx.tp = 0.85 + Math.random() * 0.15; }
+  wx.tw = (Math.random() - 0.5) * 14;
+  wx.timer = 120 + Math.random() * 240;
+}
+function updateWeather(dt) {
+  wx.timer -= dt;
+  if (wx.timer <= 0) pickWeather();
+  const k = Math.min(1, dt / 25);
+  wx.cloud += (wx.tc - wx.cloud) * k;
+  wx.fog += (wx.tf - wx.fog) * k;
+  wx.precip += (wx.tp - wx.precip) * k;
+  wx.wind += (wx.tw - wx.wind) * k * 0.6;
+}
+function tempNow() {
+  return 8 - 13 * Math.cos((sun.doy - 15) / 365 * TAU)
+       + 4 * Math.cos((sun.hours - 15) / 24 * TAU)
+       - wx.cloud * 2 - wx.precip * 1.5;
+}
+function weatherName() {
+  const t = tempNow();
+  if (wx.precip > 0.05) {
+    if (t < 1) return wx.precip > 0.5 ? 'Snow' : 'Light snow';
+    if (wx.precip > 0.75 && wx.cloud > 0.9) return 'Thunderstorm';
+    return wx.precip > 0.45 ? 'Rain' : 'Light rain';
+  }
+  if (wx.fog > 0.4) return 'Fog';
+  if (wx.cloud > 0.75) return 'Overcast';
+  if (wx.cloud > 0.35) return 'Partly cloudy';
+  return 'Clear';
+}
+
+// ── Rifles ──────────────────────────────────────────────────────────────
+const RIFLES = [
+  { name: 'Lindqvist .243 Ranger', zoom: 3, mag: 5, reload: 1.6, cycle: 0.9, sway: 0.6, recoil: 0.5, vel: 880 },
+  { name: 'Fjällman .308 Classic', zoom: 5, mag: 4, reload: 2.2, cycle: 1.2, sway: 1.0, recoil: 1.0, vel: 820 },
+  { name: 'Bergström .338 Magnum', zoom: 8, mag: 3, reload: 3.0, cycle: 1.6, sway: 1.6, recoil: 1.8, vel: 900 }
+];
+
+// ── Renderer & scene ────────────────────────────────────────────────────
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('err').style.display = 'flex';
+  document.getElementById('menu').classList.add('hidden');
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.6;
+renderer.domElement.id = 'gl';
+document.body.insertBefore(renderer.domElement, document.body.firstChild);
+
+const scene = new THREE.Scene();
+const BASE_FOV = 70;
+const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.1, 6000);
+camera.rotation.order = 'YXZ';
+
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  renderer.setSize(W, H);
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+  overlay.width = W; overlay.height = H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+scene.fog = new THREE.FogExp2(0xc8d4e0, 0.001);
+
+// Sky, sun, moon, stars
+const sky = new Sky();
+sky.scale.setScalar(50000);
+scene.add(sky);
+const skyU = sky.material.uniforms;
+skyU.turbidity.value = 8;
+skyU.rayleigh.value = 1.6;
+skyU.mieCoefficient.value = 0.005;
+skyU.mieDirectionalG.value = 0.8;
+
+const sunLight = new THREE.DirectionalLight(0xfff2dd, 2);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.left = -150; sunLight.shadow.camera.right = 150;
+sunLight.shadow.camera.top = 150; sunLight.shadow.camera.bottom = -150;
+sunLight.shadow.camera.near = 10; sunLight.shadow.camera.far = 900;
+sunLight.shadow.bias = -0.0004;
+scene.add(sunLight);
+scene.add(sunLight.target);
+
+const moonLight = new THREE.DirectionalLight(0x8fa4cc, 0);
+scene.add(moonLight);
+scene.add(moonLight.target);
+const hemi = new THREE.HemisphereLight(0xbcd4ee, 0x4a5a3a, 0.5);
+scene.add(hemi);
+const flashLight = new THREE.PointLight(0xffddaa, 0, 60); // muzzle flash
+scene.add(flashLight);
+
+const starGeo = new THREE.BufferGeometry();
+{
+  const pts = new Float32Array(1200 * 3);
+  for (let i = 0; i < 1200; i++) {
+    const a = R() * TAU, e = Math.asin(R() * 0.95);
+    const r = 4500;
+    pts[i * 3] = Math.cos(a) * Math.cos(e) * r;
+    pts[i * 3 + 1] = Math.sin(e) * r + 100;
+    pts[i * 3 + 2] = Math.sin(a) * Math.cos(e) * r;
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+}
+const starMat = new THREE.PointsMaterial({ color: 0xdde4ff, size: 5, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false });
+const stars = new THREE.Points(starGeo, starMat);
+scene.add(stars);
+
+function discTexture(inner, outer) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, inner);
+  grad.addColorStop(1, outer);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: discTexture('rgba(235,238,248,1)', 'rgba(235,238,248,0)'),
+  transparent: true, opacity: 0, depthWrite: false, fog: false
+}));
+moonSprite.scale.setScalar(260);
+scene.add(moonSprite);
+
+// Clouds: soft billboard sprites drifting with the wind
+const cloudTex = discTexture('rgba(255,255,255,0.85)', 'rgba(255,255,255,0)');
+const cloudSprites = [];
+for (let i = 0; i < 20; i++) {
+  const m = new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0, depthWrite: false });
+  const s = new THREE.Sprite(m);
+  const a = R() * TAU, r = 300 + R() * 1600;
+  s.position.set(Math.cos(a) * r, 260 + R() * 220, Math.sin(a) * r);
+  s.scale.set(500 + R() * 700, 130 + R() * 160, 1);
+  s.userData.drift = 0.5 + R();
+  scene.add(s);
+  cloudSprites.push(s);
+}
+
+// ── Terrain mesh ────────────────────────────────────────────────────────
+const groundTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#909090';
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 9000; i++) {
+    const v = 105 + Math.random() * 90 | 0;
+    g.fillStyle = 'rgb(' + v + ',' + v + ',' + v + ')';
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(180, 180);
+  return t;
+})();
+
+const TSEG = 200, TSIZE = WORLD_R * 2.2;
+const terrainGeo = new THREE.PlaneGeometry(TSIZE, TSIZE, TSEG, TSEG);
+terrainGeo.rotateX(-Math.PI / 2);
+{
+  const pos = terrainGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const cGrass = new THREE.Color(pal.grass), cGrassLo = new THREE.Color(pal.grassLo);
+  const cRock = new THREE.Color(0x7d7d84), cSnow = new THREE.Color(0xe8ecf2);
+  const col = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = terrainH(x, z);
+    pos.setY(i, h);
+    const n = fbm(x * 0.01 + 3, z * 0.01 + 8);
+    col.copy(cGrass).lerp(cGrassLo, n);
+    if (h > 55) col.lerp(cRock, smooth(55, 110, h));
+    if (h > 140 || pal.snow) col.lerp(cSnow, pal.snow ? 0.85 : smooth(140, 200, h));
+    colors[i * 3] = col.r; colors[i * 3 + 1] = col.g; colors[i * 3 + 2] = col.b;
+  }
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeo.computeVertexNormals();
+}
+const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({
+  map: groundTex, vertexColors: true, roughness: 1, metalness: 0
+}));
+terrain.receiveShadow = true;
+scene.add(terrain);
+
+// ── Vegetation (instanced) ──────────────────────────────────────────────
+const tmpM = new THREE.Matrix4(), tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpE = new THREE.Euler();
+
+function scatter(count, minR, maxR, accept) {
+  const out = [];
+  let guard = 0;
+  while (out.length < count && guard++ < count * 30) {
+    const a = R() * TAU, r = minR + Math.sqrt(R()) * (maxR - minR);
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (accept(x, z)) out.push([x, z]);
+  }
+  return out;
+}
+
+function makeInstanced(geo, mat, spots, yOff, sMin, sMax, castShadow) {
+  const inst = new THREE.InstancedMesh(geo, mat, spots.length);
+  spots.forEach(([x, z], i) => {
+    const s = lerp(sMin, sMax, R());
+    tmpP.set(x, terrainH(x, z) + yOff * s, z);
+    tmpE.set(0, R() * TAU, 0);
+    tmpQ.setFromEuler(tmpE);
+    tmpS.set(s, s * (0.9 + R() * 0.25), s);
+    tmpM.compose(tmpP, tmpQ, tmpS);
+    inst.setMatrixAt(i, tmpM);
+  });
+  inst.castShadow = !!castShadow;
+  inst.receiveShadow = false;
+  inst.instanceMatrix.needsUpdate = true;
+  scene.add(inst);
+  return inst;
+}
+
+// Conifers: merged cone stack + separate trunk instancing (shared spots)
+const coniferSpots = scatter(1400, 75, 880, (x, z) => R() < forestDensity(x, z));
+const coniferFol = BufferGeometryUtils.mergeGeometries([
+  new THREE.ConeGeometry(2.6, 4.5, 7).translate(0, 4.6, 0),
+  new THREE.ConeGeometry(2.0, 3.8, 7).translate(0, 7.2, 0),
+  new THREE.ConeGeometry(1.35, 3.0, 7).translate(0, 9.6, 0)
+]);
+const coniferMat = new THREE.MeshStandardMaterial({ color: pal.snow ? 0x2c4636 : 0x2e5238, roughness: 0.95, flatShading: true });
+makeInstanced(coniferFol, coniferMat, coniferSpots, 0, 0.7, 1.7, true);
+makeInstanced(new THREE.CylinderGeometry(0.22, 0.34, 3.2, 6).translate(0, 1.5, 0),
+  new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 1 }), coniferSpots, 0, 0.7, 1.7, false);
+
+// Birches
+const birchSpots = scatter(360, 70, 700, (x, z) => R() < forestDensity(x, z) * 0.8);
+const birchFol = BufferGeometryUtils.mergeGeometries([
+  new THREE.IcosahedronGeometry(2.2, 1).translate(0, 7.4, 0),
+  new THREE.IcosahedronGeometry(1.5, 1).translate(-1.4, 6.2, 0.4),
+  new THREE.IcosahedronGeometry(1.4, 1).translate(1.3, 6.4, -0.4)
+]);
+const birchFolMat = new THREE.MeshStandardMaterial({ color: pal.birch, roughness: 0.95, flatShading: true });
+{
+  const inst = new THREE.InstancedMesh(birchFol, birchFolMat, birchSpots.length);
+  birchSpots.forEach(([x, z], i) => {
+    const s = lerp(0.7, 1.4, R());
+    tmpP.set(x, terrainH(x, z), z);
+    tmpE.set(0, R() * TAU, 0);
+    tmpQ.setFromEuler(tmpE);
+    tmpS.set(s * pal.birchScale, s * pal.birchScale, s * pal.birchScale);
+    tmpM.compose(tmpP, tmpQ, tmpS);
+    inst.setMatrixAt(i, tmpM);
+  });
+  inst.castShadow = true;
+  inst.instanceMatrix.needsUpdate = true;
+  scene.add(inst);
+}
+makeInstanced(new THREE.CylinderGeometry(0.14, 0.2, 7, 6).translate(0, 3.5, 0),
+  new THREE.MeshStandardMaterial({ color: 0xe4e2da, roughness: 0.9 }), birchSpots, 0, 0.7, 1.4, true);
+
+// Rocks
+const rockSpots = scatter(130, 30, 800, () => true);
+makeInstanced(new THREE.DodecahedronGeometry(1.4, 0),
+  new THREE.MeshStandardMaterial({ color: pal.snow ? 0xb8bcc6 : 0x84848a, roughness: 1, flatShading: true }),
+  rockSpots, 0.15, 0.4, 2.2, true);
+
+// Grass tufts near the glade
+const bladeTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 128;
+  const g = c.getContext('2d');
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 3;
+  for (let i = 0; i < 9; i++) {
+    const x0 = 6 + i * 6;
+    g.beginPath();
+    g.moveTo(x0, 128);
+    g.quadraticCurveTo(x0 + (Math.random() - 0.5) * 18, 60, x0 + (Math.random() - 0.5) * 26, 6 + Math.random() * 30);
+    g.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+})();
+const grassGeo = BufferGeometryUtils.mergeGeometries([
+  new THREE.PlaneGeometry(1.1, 0.8).translate(0, 0.4, 0),
+  new THREE.PlaneGeometry(1.1, 0.8).rotateY(Math.PI / 2).translate(0, 0.4, 0)
+]);
+const grassMat = new THREE.MeshStandardMaterial({
+  map: bladeTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1,
+  color: pal.snow ? 0xc8ccd4 : pal.grassLo
+});
+const grassSpots = scatter(3200, 6, 260, (x, z) => forestDensity(x, z) < 0.25);
+makeInstanced(grassGeo, grassMat, grassSpots, 0, 0.6, 1.6, false);
+
+// ── Deer ────────────────────────────────────────────────────────────────
+const coatMat = new THREE.MeshStandardMaterial({ color: pal.coat, roughness: 0.95 });
+const coatDark = new THREE.MeshStandardMaterial({ color: new THREE.Color(pal.coat).multiplyScalar(0.55), roughness: 1 });
+const coatLight = new THREE.MeshStandardMaterial({ color: new THREE.Color(pal.coat).lerp(new THREE.Color(0xfff8ec), 0.5), roughness: 0.95 });
+const antlerMat = new THREE.MeshStandardMaterial({ color: 0xb09a72, roughness: 0.85 });
+
+function buildDeerTemplate() {
+  const g = new THREE.Group();
+  const add = (mesh, zone) => { mesh.castShadow = true; mesh.userData.zone = zone; return mesh; };
+
+  const body = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.30, 0.72, 4, 12), coatMat), 'body');
+  body.rotation.z = Math.PI / 2;
+  body.position.set(-0.05, 1.0, 0);
+  g.add(body);
+  const chest = add(new THREE.Mesh(new THREE.SphereGeometry(0.30, 10, 8), coatMat), 'vital');
+  chest.position.set(0.38, 0.98, 0);
+  chest.scale.set(1.1, 1, 0.95);
+  g.add(chest);
+  const rump = add(new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), coatLight), 'body');
+  rump.position.set(-0.5, 1.02, 0);
+  g.add(rump);
+
+  const neck = new THREE.Group();
+  neck.name = 'neck';
+  neck.position.set(0.52, 1.14, 0);
+  g.add(neck);
+  const neckM = add(new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.14, 0.52, 8), coatMat), 'body');
+  neckM.position.set(0.10, 0.22, 0);
+  neckM.rotation.z = -0.5;
+  neck.add(neckM);
+  const headG = new THREE.Group();
+  headG.name = 'head';
+  headG.position.set(0.24, 0.44, 0);
+  neck.add(headG);
+  const skull = add(new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), coatMat), 'head');
+  skull.scale.set(1.15, 1, 0.9);
+  headG.add(skull);
+  const snout = add(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.09, 0.24, 8), coatMat), 'head');
+  snout.position.set(0.19, -0.03, 0);
+  snout.rotation.z = -1.35;
+  headG.add(snout);
+  const nose = add(new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), coatDark), 'head');
+  nose.position.set(0.30, -0.06, 0);
+  headG.add(nose);
+  for (const sgn of [-1, 1]) {
+    const ear = add(new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.17, 6), coatMat), 'head');
+    ear.position.set(-0.05, 0.13, sgn * 0.09);
+    ear.rotation.x = sgn * 0.7;
+    headG.add(ear);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), coatDark);
+    eye.position.set(0.07, 0.03, sgn * 0.1);
+    headG.add(eye);
+    // antlers (hidden on does)
+    const beam = add(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.028, 0.42, 5), antlerMat), 'head');
+    beam.name = 'antler';
+    beam.position.set(-0.03, 0.3, sgn * 0.07);
+    beam.rotation.z = 0.35;
+    beam.rotation.x = sgn * 0.45;
+    headG.add(beam);
+    for (let t = 0; t < 3; t++) {
+      const tine = add(new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.018, 0.16 + t * 0.04, 5), antlerMat), 'head');
+      tine.name = 'antler';
+      tine.position.set(-0.10 + t * 0.07, 0.22 + t * 0.11, sgn * (0.10 + t * 0.05));
+      tine.rotation.z = -0.6;
+      tine.rotation.x = sgn * 0.5;
+      headG.add(tine);
+    }
+  }
+
+  const hips = [[0.34, 0.12], [0.34, -0.12], [-0.42, 0.13], [-0.42, -0.13]];
+  const legNames = ['legFL', 'legFR', 'legRL', 'legRR'];
+  hips.forEach(([hx, hz], i) => {
+    const leg = new THREE.Group();
+    leg.name = legNames[i];
+    leg.position.set(hx, 0.82, hz);
+    const upper = add(new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.04, 0.42, 6), coatMat), 'leg');
+    upper.position.y = -0.21;
+    leg.add(upper);
+    const lower = add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.028, 0.44, 6), coatDark), 'leg');
+    lower.position.y = -0.62;
+    leg.add(lower);
+    g.add(leg);
+  });
+
+  const tail = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.14, 3, 6), coatLight), 'body');
+  tail.name = 'tail';
+  tail.position.set(-0.78, 1.12, 0);
+  tail.rotation.z = 0.7;
+  g.add(tail);
+  return g;
+}
+const deerTemplate = buildDeerTemplate();
+const deerRoot = new THREE.Group();
+scene.add(deerRoot);
+const deerList = [];
+
+function activity() {
+  const h = sun.hours;
+  const gs = (x, s) => Math.exp(-x * x / (2 * s * s));
+  return 0.25 + 0.9 * Math.max(gs(h - sun.sunrise - 0.6, 1.6), gs(h - sun.sunset + 0.6, 1.6));
+}
+
+function spawnDeer(anywhere) {
+  const a = Math.random() * TAU;
+  const r = anywhere ? 60 + Math.random() * 260 : 240 + Math.random() * 160;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const grp = deerTemplate.clone(true);
+  const buck = Math.random() < 0.35;
+  const size = (0.9 + Math.random() * 0.22) * (buck ? 1.12 : 1);
+  grp.scale.setScalar(size);
+  grp.traverse(o => { if (o.name === 'antler') o.visible = buck; });
+  const d = {
+    grp, buck, size,
+    x, z, heading: Math.random() * TAU,
+    state: anywhere ? 'graze' : 'walk', t: 3 + Math.random() * 6,
+    phase: Math.random() * TAU, g: 0, al: 0, fall: 0, deadT: 0,
+    wounded: false, woundT: 0, dist: 999
+  };
+  grp.userData.deer = d;
+  grp.traverse(o => { o.userData.deer = d; });
+  deerRoot.add(grp);
+  deerList.push(d);
+}
+
+function fleeDeer(d, fromX, fromZ) {
+  if (d.state === 'falling' || d.state === 'dead') return;
+  d.state = 'flee';
+  // run directly away from the threat, with a little scatter
+  d.heading = Math.atan2(-(d.z - fromZ), d.x - fromX) + (Math.random() - 0.5) * 0.6;
+  d.t = 25;
+}
+
+function removeDeer(d) {
+  deerRoot.remove(d.grp);
+  const i = deerList.indexOf(d);
+  if (i !== -1) deerList.splice(i, 1);
+}
+
+function updateDeer(dt) {
+  const target = clamp(Math.round(1 + 5 * activity()), 1, 6);
+  let liveCount = 0;
+  for (const d of deerList) if (d.state !== 'dead' && d.state !== 'falling') liveCount++;
+  spawnT -= dt;
+  if (liveCount < target && spawnT <= 0) { spawnDeer(false); spawnT = 6 + Math.random() * 14; }
+
+  for (let i = deerList.length - 1; i >= 0; i--) {
+    const d = deerList[i];
+    d.t -= dt;
+    d.dist = Math.hypot(d.x - player.x, d.z - player.z);
+    const gT = d.state === 'graze' ? 1 : 0;
+    d.g += (gT - d.g) * Math.min(1, dt * 3);
+    const aT = (d.state === 'alert' || d.state === 'flee') ? 1 : 0;
+    d.al += (aT - d.al) * Math.min(1, dt * 4);
+
+    // spook if the hunter walks too close
+    if (d.state !== 'flee' && d.state !== 'falling' && d.state !== 'dead') {
+      if (d.dist < 25) fleeDeer(d, player.x, player.z);
+      else if (d.dist < 55 && playerMoving && Math.random() < dt * 0.8) { d.state = 'alert'; d.t = 4 + Math.random() * 4; }
+    }
+
+    switch (d.state) {
+      case 'graze': case 'stand':
+        if (d.t <= 0) {
+          const r = Math.random();
+          if (r < 0.45) { d.state = 'graze'; d.t = 4 + Math.random() * 7; }
+          else if (r < 0.65) { d.state = 'stand'; d.t = 2 + Math.random() * 3; }
+          else { d.state = 'walk'; d.t = 3 + Math.random() * 6; d.heading += (Math.random() - 0.5) * 2; }
+        }
+        break;
+      case 'walk': {
+        d.x += Math.cos(d.heading) * 0.9 * dt;
+        d.z -= Math.sin(d.heading) * 0.9 * dt;
+        const r = Math.hypot(d.x, d.z);
+        if (r > 480) d.heading = Math.atan2(d.z, -d.x); // turn back toward the glade
+        if (d.t <= 0) { d.state = 'graze'; d.t = 4 + Math.random() * 8; }
+        break;
+      }
+      case 'alert':
+        if (d.t <= 0) { d.state = 'graze'; d.t = 3 + Math.random() * 5; }
+        break;
+      case 'flee': {
+        d.x += Math.cos(d.heading) * 8.5 * dt;
+        d.z -= Math.sin(d.heading) * 8.5 * dt;
+        if (d.wounded) {
+          d.woundT -= dt;
+          if (d.woundT <= 0) { d.state = 'falling'; d.fall = 0; thud(); }
+        }
+        if (Math.hypot(d.x, d.z) > 900 || d.t <= 0) { removeDeer(d); continue; }
+        break;
+      }
+      case 'falling':
+        d.fall += dt * 2.2;
+        if (d.fall >= 1) { d.fall = 1; d.state = 'dead'; d.t = 14; }
+        break;
+      case 'dead':
+        if (d.t < 2.5) d.grp.position.y -= dt * 0.5; // settle into the grass
+        if (d.t <= 0) { removeDeer(d); continue; }
+        break;
+    }
+
+    d.phase += dt * (d.state === 'flee' ? 13 : d.state === 'walk' ? 5.5 : 0.7);
+
+    // pose
+    const amp = d.state === 'flee' ? 0.9 : d.state === 'walk' ? 0.45 : 0.03;
+    const offs = [0, Math.PI, Math.PI * 0.55, Math.PI * 1.5];
+    ['legFL', 'legFR', 'legRL', 'legRR'].forEach((n, li) => {
+      const leg = d.grp.getObjectByName(n);
+      if (leg) leg.rotation.z = Math.sin(d.phase + offs[li]) * amp;
+    });
+    const neck = d.grp.getObjectByName('neck');
+    if (neck) neck.rotation.z = lerp(0.25 * d.al, -1.55, d.g);
+    const tail = d.grp.getObjectByName('tail');
+    if (tail) tail.rotation.z = d.state === 'flee' ? 2.1 : 0.7;
+
+    if (d.state !== 'dead') d.grp.position.set(d.x, terrainH(d.x, d.z), d.z);
+    d.grp.rotation.y = d.heading;
+    d.grp.rotation.x = -d.fall * d.fall * Math.PI / 2 * 0.92;
+  }
+}
+
+// ── Precipitation ───────────────────────────────────────────────────────
+const RAIN_N = 1600, SNOW_N = 2200, PRECIP_BOX = 46;
+const rainGeo = new THREE.BufferGeometry();
+const rainPos = new Float32Array(RAIN_N * 2 * 3);
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+const rainDrops = [];
+for (let i = 0; i < RAIN_N; i++) rainDrops.push({ x: (Math.random() - 0.5) * PRECIP_BOX * 2, y: Math.random() * 40, z: (Math.random() - 0.5) * PRECIP_BOX * 2, v: 18 + Math.random() * 8 });
+const rainLines = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({ color: 0xaebfd8, transparent: true, opacity: 0.4 }));
+rainLines.frustumCulled = false;
+scene.add(rainLines);
+
+const snowGeo = new THREE.BufferGeometry();
+const snowPos = new Float32Array(SNOW_N * 3);
+snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+const snowFlakes = [];
+for (let i = 0; i < SNOW_N; i++) snowFlakes.push({ x: (Math.random() - 0.5) * PRECIP_BOX * 2, y: Math.random() * 35, z: (Math.random() - 0.5) * PRECIP_BOX * 2, v: 1 + Math.random() * 1.4, ph: Math.random() * TAU });
+const snowPoints = new THREE.Points(snowGeo, new THREE.PointsMaterial({
+  map: discTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)'),
+  color: 0xf0f4fa, size: 0.14, transparent: true, opacity: 0.9, depthWrite: false
+}));
+snowPoints.frustumCulled = false;
+scene.add(snowPoints);
+
+function updatePrecip(dt, elapsed) {
+  const isSnow = tempNow() < 1;
+  const nRain = isSnow ? 0 : Math.floor(wx.precip * RAIN_N);
+  const nSnow = isSnow ? Math.floor(wx.precip * SNOW_N) : 0;
+  rainLines.visible = nRain > 0;
+  snowPoints.visible = nSnow > 0;
+  const px = player.x, pz = player.z, py = player.y;
+  if (nRain > 0) {
+    const wxv = wx.wind * 0.35;
+    for (let i = 0; i < nRain; i++) {
+      const dr = rainDrops[i];
+      dr.y -= dr.v * dt;
+      dr.x += wxv * dt;
+      if (dr.y < -4) { dr.y += 40; dr.x = (Math.random() - 0.5) * PRECIP_BOX * 2; dr.z = (Math.random() - 0.5) * PRECIP_BOX * 2; }
+      const j = i * 6;
+      rainPos[j] = px + dr.x; rainPos[j + 1] = py + dr.y; rainPos[j + 2] = pz + dr.z;
+      rainPos[j + 3] = px + dr.x + wxv * 0.04; rainPos[j + 4] = py + dr.y - 0.7; rainPos[j + 5] = pz + dr.z;
+    }
+    rainGeo.setDrawRange(0, nRain * 2);
+    rainGeo.attributes.position.needsUpdate = true;
+  }
+  if (nSnow > 0) {
+    for (let i = 0; i < nSnow; i++) {
+      const f = snowFlakes[i];
+      f.y -= f.v * dt;
+      f.x += (wx.wind * 0.12 + Math.sin(elapsed * 1.3 + f.ph) * 0.4) * dt;
+      f.z += Math.cos(elapsed * 1.1 + f.ph) * 0.3 * dt;
+      if (f.y < -4) { f.y += 35; f.x = (Math.random() - 0.5) * PRECIP_BOX * 2; f.z = (Math.random() - 0.5) * PRECIP_BOX * 2; }
+      const j = i * 3;
+      snowPos[j] = px + f.x; snowPos[j + 1] = py + f.y; snowPos[j + 2] = pz + f.z;
+    }
+    snowGeo.setDrawRange(0, nSnow);
+    snowGeo.attributes.position.needsUpdate = true;
+  }
+}
+
+// ── Impact FX (sprite puffs) ────────────────────────────────────────────
+const fxList = [];
+const dustTex = discTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)');
+function puffAt(p, color, size) {
+  const m = new THREE.SpriteMaterial({ map: dustTex, color, transparent: true, opacity: 0.85, depthWrite: false });
+  const s = new THREE.Sprite(m);
+  s.position.copy(p);
+  s.scale.setScalar(size * 0.4);
+  scene.add(s);
+  fxList.push({ s, t: 0, max: 0.5, size });
+}
+function updateFx(dt) {
+  for (let i = fxList.length - 1; i >= 0; i--) {
+    const f = fxList[i];
+    f.t += dt;
+    const k = f.t / f.max;
+    f.s.scale.setScalar(f.size * (0.4 + k * 1.4));
+    f.s.material.opacity = 0.85 * (1 - k);
+    f.s.position.y += dt * 0.6;
+    if (k >= 1) { scene.remove(f.s); f.s.material.dispose(); fxList.splice(i, 1); }
+  }
+}
+
+// ── Audio (procedural) ──────────────────────────────────────────────────
+let AC = null, master = null, windG = null, noiseBuf = null, muted = false;
+function initAudio() {
+  if (AC) return;
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  master = AC.createGain();
+  master.gain.value = 0.8;
+  master.connect(AC.destination);
+  noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+  const data = noiseBuf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const src = AC.createBufferSource();
+  src.buffer = noiseBuf;
+  src.loop = true;
+  const f = AC.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = 320;
+  windG = AC.createGain();
+  windG.gain.value = 0;
+  src.connect(f); f.connect(windG); windG.connect(master);
+  src.start();
+}
+function playNoise(dur, freq, gain) {
+  if (!AC || muted) return;
+  const src = AC.createBufferSource();
+  src.buffer = noiseBuf;
+  const f = AC.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = freq;
+  const g = AC.createGain();
+  const t = AC.currentTime;
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(f); f.connect(g); g.connect(master);
+  src.start(t, Math.random());
+  src.stop(t + dur + 0.05);
+}
+function shotSound() {
+  playNoise(0.5, 1600, 0.9);
+  if (!AC || muted) return;
+  const o = AC.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(90, AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(35, AC.currentTime + 0.28);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.55, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.3);
+  o.connect(g); g.connect(master);
+  o.start();
+  o.stop(AC.currentTime + 0.32);
+}
+const boltSound = () => { playNoise(0.05, 3200, 0.18); setTimeout(() => playNoise(0.05, 2600, 0.18), 110); };
+const clickSound = () => playNoise(0.03, 2800, 0.12);
+const thud = () => playNoise(0.16, 220, 0.3);
+const thunderSound = () => playNoise(3.2, 140, 0.6);
+
+// ── Player / input ──────────────────────────────────────────────────────
+const player = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+player.y = terrainH(0, 0) + 1.7;
+let state = 'menu';
+let scoped = false, holdingBreath = false, breath = 1;
+let rifleIdx = 1, ammo = RIFLES[1].mag;
+let reloadT = 0, fireCd = 0, recoil = 0, flashT = 0;
+let swYaw = 0, swPitch = 0, swayT = Math.random() * 100;
+let score = 0, kills = 0, best = 0;
+try { best = parseInt(localStorage.getItem('deerhunt-best') || '0', 10) || 0; } catch (e) {}
+let spawnT = 2;
+const keys = {};
+let playerMoving = false;
+let hitMarkT = 0;
+let bobT = 0;
+let flash = 0, thunderIn = -1;
+let tracer = null;
+let pointerLocked = false;
+let virtualLook = false;
+let vmx = 0, vmy = 0;
+
+const menuEl = document.getElementById('menu');
+const hudEl = document.getElementById('hud');
+const glEl = renderer.domElement;
+
+function msg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg';
+  div.textContent = text;
+  const box = document.getElementById('msgs');
+  box.appendChild(div);
+  while (box.children.length > 4) box.removeChild(box.firstChild);
+  setTimeout(() => { if (div.parentNode) div.parentNode.removeChild(div); }, 4600);
+}
+
+function startHunt() {
+  initAudio();
+  if (AC && AC.state === 'suspended') AC.resume();
+  state = 'play';
+  menuEl.classList.add('hidden');
+  hudEl.style.display = '';
+  virtualLook = false;
+  try {
+    const p = glEl.requestPointerLock();
+    if (p && p.catch) p.catch(() => { virtualLook = true; });
+  } catch (e) { virtualLook = true; }
+}
+function backToMenu() {
+  state = 'menu';
+  scoped = false;
+  menuEl.classList.remove('hidden');
+  hudEl.style.display = 'none';
+  document.getElementById('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+document.getElementById('start').addEventListener('click', startHunt);
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === glEl;
+  if (!pointerLocked && state === 'play' && !virtualLook) backToMenu();
+});
+document.addEventListener('pointerlockerror', () => { virtualLook = true; });
+
+glEl.addEventListener('mousemove', e => {
+  if (state !== 'play') return;
+  if (pointerLocked) {
+    const k = 0.0022 / (scoped ? RIFLES[rifleIdx].zoom * 0.55 : 1);
+    player.yaw -= e.movementX * k;
+    player.pitch = clamp(player.pitch - e.movementY * k, -1.2, 1.2);
+  } else {
+    vmx = e.clientX; vmy = e.clientY;
+  }
+});
+glEl.addEventListener('mousedown', e => {
+  if (state === 'menu') return;
+  if (e.button === 0) {
+    if (!pointerLocked && !virtualLook) { startHunt(); return; }
+    fire();
+  }
+  if (e.button === 2) scoped = true;
+});
+glEl.addEventListener('mouseup', e => { if (e.button === 2) scoped = false; });
+glEl.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('blur', () => { scoped = false; holdingBreath = false; for (const k in keys) keys[k] = false; });
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') { holdingBreath = true; e.preventDefault(); }
+  if (state !== 'play') return;
+  if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
+    const idx = +e.code.slice(-1) - 1;
+    if (idx !== rifleIdx) {
+      rifleIdx = idx;
+      ammo = RIFLES[idx].mag;
+      reloadT = 0;
+      boltSound();
+      msg(RIFLES[idx].name);
+    }
+  }
+  if (e.code === 'KeyR' && reloadT <= 0 && ammo < RIFLES[rifleIdx].mag) reloadT = RIFLES[rifleIdx].reload;
+  if (e.code === 'KeyM') {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.8;
+    msg(muted ? 'Sound off' : 'Sound on');
+  }
+  if (e.code === 'Escape' && virtualLook) backToMenu();
+});
+window.addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Space') holdingBreath = false;
+});
+
+// ── Ballistics ──────────────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+function terrainRayDist(origin, dir, maxD) {
+  let t = 2;
+  while (t < maxD) {
+    const x = origin.x + dir.x * t, y = origin.y + dir.y * t, z = origin.z + dir.z * t;
+    const dh = y - terrainH(x, z);
+    if (dh <= 0) return t;
+    t += clamp(dh * 0.8, 0.4, 10);
+  }
+  return maxD;
+}
+function fire() {
+  if (state !== 'play' || reloadT > 0 || fireCd > 0) return;
+  if (ammo <= 0) { clickSound(); msg('Out of ammo — press R to reload'); return; }
+  const rifle = RIFLES[rifleIdx];
+  ammo--;
+  fireCd = rifle.cycle;
+  recoil = 1;
+  flashT = 0.06;
+  hitMarkT = 0;
+  shotSound();
+  flashLight.position.set(player.x, player.y - 0.2, player.z);
+  flashLight.intensity = 30;
+
+  // aim direction: camera direction incl. sway; hip fire adds spread
+  let yaw = player.yaw + swYaw, pitch = player.pitch + swPitch;
+  if (!scoped) {
+    yaw += (Math.random() - 0.5) * 0.03 * rifle.sway;
+    pitch += (Math.random() - 0.5) * 0.03 * rifle.sway;
+  }
+  const dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
+  const origin = new THREE.Vector3(player.x, player.y, player.z);
+
+  // first pass to estimate range, then apply drop + wind drift
+  raycaster.set(origin, dir);
+  raycaster.far = 1200;
+  let hits = raycaster.intersectObjects(deerRoot.children, true);
+  let D = hits.length ? hits[0].distance : terrainRayDist(origin, dir, 1200);
+  const tof = D / rifle.vel;
+  const zt = 100 / rifle.vel;
+  const dropM = Math.max(0, 4.9 * (tof * tof - zt * zt));
+  const windM = wx.wind * tof * 0.5;
+  const dir2 = dir.clone();
+  dir2.y -= dropM / Math.max(D, 1);
+  const right = new THREE.Vector3(-dir.z, 0, dir.x).normalize();
+  dir2.addScaledVector(right, windM / Math.max(D, 1));
+  dir2.normalize();
+
+  raycaster.set(origin, dir2);
+  hits = raycaster.intersectObjects(deerRoot.children, true);
+  const tD = terrainRayDist(origin, dir2, 1200);
+  let impact, hitDeer = null, zone = '';
+  if (hits.length && hits[0].distance < tD) {
+    const h0 = hits[0];
+    hitDeer = h0.object.userData.deer || null;
+    zone = h0.object.userData.zone || 'body';
+    impact = h0.point;
+    if (hitDeer && (hitDeer.state === 'falling' || hitDeer.state === 'dead')) { hitDeer = null; }
+  } else {
+    impact = origin.clone().addScaledVector(dir2, tD);
+  }
+  tracer = { from: origin.clone().addScaledVector(right, 0.25).add(new THREE.Vector3(0, -0.22, 0)), to: impact.clone(), t: 0.09 };
+
+  if (hitDeer) {
+    const dist = Math.round(origin.distanceTo(impact));
+    puffAt(impact, 0x8a1c14, 0.6);
+    hitMarkT = 0.25;
+    let pts;
+    if (zone === 'vital' || zone === 'head') {
+      hitDeer.state = 'falling';
+      hitDeer.fall = 0;
+      thud();
+      pts = Math.round(dist * 1.5) + (hitDeer.buck ? 150 : 0);
+      msg((zone === 'head' ? 'Head shot! ' : 'Clean kill! ') + (hitDeer.buck ? 'Buck' : 'Doe') + ' at ' + dist + ' m — +' + pts);
+    } else {
+      hitDeer.wounded = true;
+      hitDeer.woundT = 1.2 + Math.random() * 2;
+      fleeDeer(hitDeer, player.x, player.z);
+      pts = dist + (hitDeer.buck ? 100 : 0);
+      msg('Hit! ' + (hitDeer.buck ? 'Buck' : 'Doe') + ' at ' + dist + ' m — +' + pts);
+    }
+    score += pts;
+    kills++;
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem('deerhunt-best', String(best)); } catch (e) {}
+    }
+  } else {
+    puffAt(impact, pal.snow ? 0xe8ecf4 : 0x9a8a68, 0.9);
+  }
+
+  // every deer hears the shot
+  for (const d of deerList) {
+    if (d === hitDeer || d.state === 'falling' || d.state === 'dead' || d.state === 'flee') continue;
+    const m = Math.hypot(d.x - impact.x, d.z - impact.z);
+    if (m < 12) fleeDeer(d, impact.x, impact.z);
+    else if (d.state === 'alert' && m < 60) fleeDeer(d, impact.x, impact.z);
+    else { d.state = 'alert'; d.t = 5 + Math.random() * 6; }
+  }
+}
+
+// ── Tracer line ─────────────────────────────────────────────────────────
+const tracerGeo = new THREE.BufferGeometry();
+tracerGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+const tracerLine = new THREE.Line(tracerGeo, new THREE.LineBasicMaterial({ color: 0xffe9b0, transparent: true, opacity: 0.5 }));
+tracerLine.visible = false;
+tracerLine.frustumCulled = false;
+scene.add(tracerLine);
+
+// ── Sky / lighting update ───────────────────────────────────────────────
+let light = 1, golden = 0, nightAmt = 0;
+const sunDir = new THREE.Vector3();
+function updateSky() {
+  const elev = sun.alt * 72;                       // degrees
+  const az = lerp(70, 290, sun.alt >= 0 ? sun.dayT : (sun.nightT < 0.5 ? 1 : 0));
+  const phi = THREE.MathUtils.degToRad(90 - elev);
+  const theta = THREE.MathUtils.degToRad(az);
+  sunDir.setFromSphericalCoords(1, phi, theta);
+  skyU.sunPosition.value.copy(sunDir);
+  skyU.turbidity.value = 6 + wx.cloud * 10 + wx.fog * 6;
+  skyU.rayleigh.value = 1.2 + golden * 2.4;
+  skyU.mieCoefficient.value = 0.004 + wx.cloud * 0.012;
+
+  light = clamp((sun.alt + 0.05) * 3.2, 0.05, 1) * (1 - 0.4 * wx.cloud) * (1 - 0.2 * wx.fog);
+  golden = clamp(1 - Math.abs(sun.alt - 0.06) / 0.14, 0, 1) * (1 - wx.cloud * 0.7);
+  nightAmt = clamp((0.02 - sun.alt) * 8, 0, 1);
+
+  sunLight.intensity = clamp(sun.alt * 3, 0, 1) * 2.4 * (1 - wx.cloud * 0.85) * (1 - wx.fog * 0.5);
+  sunLight.color.setHSL(0.09 + 0.04 * (1 - golden), 0.5 * golden + 0.15, 0.9 - golden * 0.25);
+  sunLight.position.set(player.x + sunDir.x * 500, sunDir.y * 500, player.z + sunDir.z * 500);
+  sunLight.target.position.set(player.x, 0, player.z);
+
+  // moon roughly opposite the sun's daily track
+  const mT = sun.nightT;
+  const mElev = Math.sin(Math.PI * mT) * 50;
+  const mAz = lerp(70, 290, mT);
+  const mPhi = THREE.MathUtils.degToRad(90 - mElev);
+  const mTheta = THREE.MathUtils.degToRad(mAz);
+  const mDir = new THREE.Vector3().setFromSphericalCoords(1, mPhi, mTheta);
+  const moonUp = nightAmt * clamp(mElev / 15, 0, 1) * (1 - wx.cloud * 0.9);
+  moonLight.intensity = moonUp * 0.35;
+  moonLight.position.set(player.x + mDir.x * 500, mDir.y * 500, player.z + mDir.z * 500);
+  moonLight.target.position.set(player.x, 0, player.z);
+  moonSprite.material.opacity = moonUp;
+  moonSprite.position.set(player.x + mDir.x * 3800, mDir.y * 3800, player.z + mDir.z * 3800);
+
+  starMat.opacity = nightAmt * (1 - wx.cloud) * (1 - wx.fog) * 0.9;
+
+  hemi.intensity = 0.06 + light * 0.55 + nightAmt * 0.04;
+  renderer.toneMappingExposure = 0.45 + light * 0.25;
+
+  // fog matches the horizon
+  const fogCol = new THREE.Color().setHSL(0.58 - golden * 0.5, 0.25 + golden * 0.35, clamp(0.12 + light * 0.55, 0.03, 0.75));
+  scene.fog.color.copy(fogCol);
+  scene.fog.density = 0.0007 + wx.fog * 0.014 + wx.precip * 0.0035 + nightAmt * 0.0012;
+
+  const cN = wx.cloud * cloudSprites.length;
+  cloudSprites.forEach((s, i) => {
+    s.material.opacity = clamp(cN - i, 0, 1) * 0.5 * clamp(0.25 + light, 0, 1);
+    s.material.color.setScalar(clamp(0.35 + light * 0.75 - wx.precip * 0.3, 0.1, 1));
+  });
+}
+
+// ── HUD ─────────────────────────────────────────────────────────────────
+const el = id => document.getElementById(id);
+function weatherIconTxt(name) {
+  if (name.includes('snow') || name === 'Snow') return '❄';
+  if (name === 'Thunderstorm') return '⛈';
+  if (name.includes('rain') || name === 'Rain') return '\u{1F327}';
+  if (name === 'Fog') return '≈';
+  if (name === 'Overcast') return '☁';
+  if (name === 'Partly cloudy') return '⛅';
+  return nightAmt > 0.5 ? '☽' : '☀';
+}
+let hudTick = 0;
+function updateHUD(dt, now) {
+  hudTick -= dt;
+  if (hudTick > 0) return;
+  hudTick = 0.25;
+  el('clock').textContent = now.toTimeString().slice(0, 8);
+  const wn = weatherName();
+  el('wline').textContent = SEASON_NAMES[seasonIdx] + ' · ' + wn + ' ' + weatherIconTxt(wn) + ' · ' + tempNow().toFixed(0) + '°C';
+  const wdir = wx.wind < -0.5 ? '←' : wx.wind > 0.5 ? '→' : '·';
+  el('wline2').textContent = 'wind ' + wdir + ' ' + Math.abs(wx.wind).toFixed(1) + ' m/s · sun ' + fmtH(sun.sunrise) + '–' + fmtH(sun.sunset);
+  el('score').textContent = 'SCORE ' + score;
+  el('stats').textContent = 'deer ' + kills + ' · best ' + best;
+  const rifle = RIFLES[rifleIdx];
+  el('rname').textContent = '[' + (rifleIdx + 1) + '] ' + rifle.name + ' ×' + rifle.zoom;
+  let ammoStr = '';
+  for (let a = 0; a < rifle.mag; a++) ammoStr += a < ammo ? '●' : '○';
+  const ammoEl = el('ammo');
+  ammoEl.textContent = ammoStr;
+  ammoEl.className = ammo === 0 ? 'empty' : '';
+  el('rhint').textContent = reloadT > 0 ? 'reloading…' : (ammo === 0 ? 'press R to reload' : '');
+}
+
+// ── Overlay (reticle / scope) ───────────────────────────────────────────
+function drawOverlay() {
+  octx.clearRect(0, 0, W, H);
+  if (state !== 'play') return;
+  const cx = W / 2, cy = H / 2;
+  if (scoped) {
+    const r = Math.min(W, H) * 0.44;
+    octx.fillStyle = 'rgba(3,5,7,0.985)';
+    octx.beginPath();
+    octx.rect(0, 0, W, H);
+    octx.arc(cx, cy, r, 0, TAU, true);
+    octx.fill();
+    const lg = octx.createRadialGradient(cx, cy, r * 0.72, cx, cy, r);
+    lg.addColorStop(0, 'rgba(0,0,20,0)');
+    lg.addColorStop(1, 'rgba(0,0,20,0.55)');
+    octx.fillStyle = lg;
+    octx.beginPath(); octx.arc(cx, cy, r, 0, TAU); octx.fill();
+    octx.strokeStyle = '#0a0c0e';
+    octx.lineWidth = 6;
+    octx.beginPath(); octx.arc(cx, cy, r, 0, TAU); octx.stroke();
+    octx.strokeStyle = 'rgba(10,12,10,0.9)';
+    octx.lineWidth = 1.4;
+    octx.beginPath();
+    octx.moveTo(cx - r, cy); octx.lineTo(cx + r, cy);
+    octx.moveTo(cx, cy - r); octx.lineTo(cx, cy + r);
+    octx.stroke();
+    octx.fillStyle = 'rgba(10,12,10,0.9)';
+    for (let i = 1; i <= 4; i++) {
+      octx.beginPath(); octx.arc(cx, cy + i * r * 0.12, 2.2, 0, TAU); octx.fill();
+      octx.beginPath(); octx.arc(cx + i * r * 0.12, cy, 1.6, 0, TAU); octx.fill();
+      octx.beginPath(); octx.arc(cx - i * r * 0.12, cy, 1.6, 0, TAU); octx.fill();
+    }
+    // rangefinder: whatever deer is closest to the reticle
+    let bestD = null, bestAng = 0.06;
+    const fwd = new THREE.Vector3(-Math.sin(player.yaw + swYaw), Math.sin(player.pitch + swPitch), -Math.cos(player.yaw + swYaw));
+    for (const d of deerList) {
+      if (d.state === 'dead') continue;
+      const to = new THREE.Vector3(d.x - player.x, terrainH(d.x, d.z) + 1 - player.y, d.z - player.z);
+      const dist = to.length();
+      to.normalize();
+      const ang = fwd.angleTo(to);
+      if (ang < bestAng) { bestAng = ang; bestD = { dist: Math.round(dist), buck: d.buck }; }
+    }
+    if (bestD) {
+      octx.fillStyle = 'rgba(240,235,210,0.9)';
+      octx.font = '13px monospace';
+      octx.textAlign = 'center';
+      octx.fillText(bestD.dist + ' m' + (bestD.buck ? '  •  buck' : ''), cx, cy + r * 0.6);
+    }
+    // breath meter
+    octx.fillStyle = 'rgba(0,0,0,0.5)';
+    octx.fillRect(cx - 50, cy + r * 0.75, 100, 6);
+    octx.fillStyle = breath > 0.25 ? 'rgba(120,200,140,0.85)' : 'rgba(220,120,90,0.85)';
+    octx.fillRect(cx - 50, cy + r * 0.75, 100 * breath, 6);
+  } else {
+    octx.strokeStyle = 'rgba(235,235,225,0.75)';
+    octx.lineWidth = 1.4;
+    const g = 6, l = 12;
+    octx.beginPath();
+    octx.moveTo(cx - g - l, cy); octx.lineTo(cx - g, cy);
+    octx.moveTo(cx + g, cy); octx.lineTo(cx + g + l, cy);
+    octx.moveTo(cx, cy - g - l); octx.lineTo(cx, cy - g);
+    octx.moveTo(cx, cy + g); octx.lineTo(cx, cy + g + l);
+    octx.stroke();
+  }
+  if (hitMarkT > 0) {
+    octx.strokeStyle = 'rgba(230,90,70,' + (hitMarkT / 0.25) + ')';
+    octx.lineWidth = 2;
+    const hm = 10;
+    octx.beginPath();
+    octx.moveTo(cx - hm, cy - hm); octx.lineTo(cx - 4, cy - 4);
+    octx.moveTo(cx + hm, cy - hm); octx.lineTo(cx + 4, cy - 4);
+    octx.moveTo(cx - hm, cy + hm); octx.lineTo(cx - 4, cy + 4);
+    octx.moveTo(cx + hm, cy + hm); octx.lineTo(cx + 4, cy + 4);
+    octx.stroke();
+  }
+  if (flashT > 0) {
+    octx.fillStyle = 'rgba(255,225,150,' + flashT * 3 + ')';
+    octx.fillRect(0, 0, W, H);
+  }
+  if (flash > 0.01) {
+    octx.fillStyle = 'rgba(235,240,255,' + flash * 0.5 + ')';
+    octx.fillRect(0, 0, W, H);
+  }
+}
+
+// ── Main loop ───────────────────────────────────────────────────────────
+pickWeather();
+wx.cloud = wx.tc; wx.fog = wx.tf; wx.precip = wx.tp; wx.wind = wx.tw;
+computeSun(now0);
+for (let i = 0; i < 3; i++) spawnDeer(true);
+document.getElementById('menu-season').textContent =
+  SEASON_NAMES[seasonIdx] + ' · sunrise ' + fmtH(sun.sunrise) + ' · sunset ' + fmtH(sun.sunset);
+document.getElementById('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
+
+let lastT = performance.now(), elapsed = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (t - lastT) / 1000);
+  lastT = t;
+  elapsed += dt;
+  const now = new Date();
+  computeSun(now);
+  updateWeather(dt);
+  swayT += dt;
+
+  // movement
+  playerMoving = false;
+  if (state === 'play') {
+    const spd = 3.2 * (scoped ? 0.4 : 1);
+    let fx2 = 0, fz2 = 0;
+    if (keys.KeyW) { fx2 += 1; }
+    if (keys.KeyS) { fx2 -= 1; }
+    if (keys.KeyA) { fz2 -= 1; }
+    if (keys.KeyD) { fz2 += 1; }
+    if (fx2 || fz2) {
+      playerMoving = true;
+      const len = Math.hypot(fx2, fz2);
+      const fwdX = -Math.sin(player.yaw), fwdZ = -Math.cos(player.yaw);
+      const rgtX = -fwdZ, rgtZ = fwdX;
+      player.x += (fwdX * fx2 + rgtX * fz2) / len * spd * dt;
+      player.z += (fwdZ * fx2 + rgtZ * fz2) / len * spd * dt;
+      const pr = Math.hypot(player.x, player.z);
+      if (pr > 620) { player.x *= 620 / pr; player.z *= 620 / pr; }
+      bobT += dt * 7;
+    }
+    player.y = terrainH(player.x, player.z) + 1.7 + Math.sin(bobT) * 0.045 * (playerMoving ? 1 : 0);
+
+    if (virtualLook && !pointerLocked) {
+      const ox = (vmx - W / 2) / (W / 2), oy = (vmy - H / 2) / (H / 2);
+      const dead = 0.18;
+      const kx = Math.abs(ox) > dead ? (ox - Math.sign(ox) * dead) : 0;
+      const ky = Math.abs(oy) > dead ? (oy - Math.sign(oy) * dead) : 0;
+      const sens = scoped ? 0.3 : 1;
+      player.yaw -= kx * kx * kx * 4 * dt * sens;
+      player.pitch = clamp(player.pitch - ky * ky * ky * 3 * dt * sens, -1.2, 1.2);
+    }
+  }
+
+  // breath & sway
+  const rifle = RIFLES[rifleIdx];
+  if (holdingBreath && scoped && breath > 0) breath = Math.max(0, breath - dt / 4);
+  else breath = Math.min(1, breath + dt / 6);
+  const bf = (holdingBreath && scoped && breath > 0) ? 0.22 : 1;
+  const swAmp = rifle.sway * (scoped ? 0.0035 : 0.0016) * bf * (playerMoving ? 2.2 : 1);
+  swYaw = (Math.sin(swayT * 1.1) + 0.6 * Math.sin(swayT * 2.3 + 1.7)) * swAmp;
+  swPitch = (Math.sin(swayT * 1.7 + 0.9) + 0.6 * Math.sin(swayT * 2.9)) * swAmp + recoil * 0.05;
+
+  recoil = Math.max(0, recoil - dt * 2.2);
+  fireCd = Math.max(0, fireCd - dt);
+  flashT = Math.max(0, flashT - dt);
+  hitMarkT = Math.max(0, hitMarkT - dt);
+  flashLight.intensity = Math.max(0, flashLight.intensity - dt * 600);
+  if (reloadT > 0) {
+    reloadT -= dt;
+    if (reloadT <= 0) { reloadT = 0; ammo = rifle.mag; boltSound(); }
+  }
+
+  // camera
+  const targetFov = scoped ? BASE_FOV / rifle.zoom : BASE_FOV;
+  camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 10);
+  camera.updateProjectionMatrix();
+  camera.position.set(player.x, player.y, player.z);
+  camera.rotation.set(player.pitch + swPitch, player.yaw + swYaw, 0);
+
+  updateSky();
+  if (state === 'play') updateDeer(dt);
+  updateFx(dt);
+  updatePrecip(dt, elapsed);
+
+  // clouds drift with the wind
+  for (const s of cloudSprites) {
+    s.position.x += (wx.wind * 1.2 + s.userData.drift) * dt;
+    if (s.position.x - player.x > 2200) s.position.x -= 4400;
+    if (s.position.x - player.x < -2200) s.position.x += 4400;
+  }
+
+  // thunder
+  if (wx.precip > 0.72 && wx.cloud > 0.88 && tempNow() > 0 && Math.random() < dt * 0.045) {
+    flash = 1;
+    thunderIn = 0.8 + Math.random() * 2.4;
+  }
+  flash = Math.max(0, flash - dt * 3.2);
+  if (thunderIn > 0) {
+    thunderIn -= dt;
+    if (thunderIn <= 0) { thunderSound(); thunderIn = -1; }
+  }
+
+  // tracer
+  if (tracer) {
+    tracer.t -= dt;
+    if (tracer.t <= 0) { tracer = null; tracerLine.visible = false; }
+    else {
+      tracerLine.visible = true;
+      const pp = tracerGeo.attributes.position;
+      pp.setXYZ(0, tracer.from.x, tracer.from.y, tracer.from.z);
+      pp.setXYZ(1, tracer.to.x, tracer.to.y, tracer.to.z);
+      pp.needsUpdate = true;
+      tracerLine.material.opacity = tracer.t / 0.09 * 0.5;
+    }
+  }
+
+  if (windG) windG.gain.value = muted ? 0 : 0.02 + Math.abs(wx.wind) / 8 * 0.12 + wx.precip * 0.1;
+
+  renderer.render(scene, camera);
+  drawOverlay();
+  updateHUD(dt, now);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
