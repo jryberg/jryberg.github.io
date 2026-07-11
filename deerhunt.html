@@ -7,37 +7,46 @@
 <style>
 html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000;
   font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace; }
-canvas { display: block; }
-#gl { position: fixed; inset: 0; cursor: none; }
+#gl { width: 100vw; height: 100vh; display: block; cursor: none; outline: none; touch-action: none; }
 #overlay { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #d8e6d8; font-size: 13px; }
-.panel { position: absolute; background: rgba(8,10,10,0.62); border: 1px solid rgba(87,196,87,0.25); border-radius: 6px; padding: 8px 12px; line-height: 1.5; }
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #eef6ee; font-size: 13px; }
+.panel { position: absolute; background: rgba(10,14,18,0.6); border: 1px solid rgba(120,220,120,0.35); border-radius: 10px; padding: 8px 12px; line-height: 1.5; }
 #p-left { top: 10px; left: 10px; min-width: 200px; }
 #p-right { top: 10px; right: 10px; text-align: right; }
 #p-rifle { bottom: 12px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 300px; }
 #clock { font-size: 22px; font-weight: bold; }
-.dim { color: #9ab89a; }
-#score { font-size: 17px; font-weight: bold; }
-#ammo { font-size: 15px; letter-spacing: 3px; color: #57c457; }
-#ammo.empty { color: #c46a57; }
-#rhint { font-size: 11px; color: #9ab89a; min-height: 14px; }
-#msgs { position: absolute; top: 16%; left: 0; right: 0; text-align: center; }
-.msg { font-size: 15px; font-weight: bold; color: #e8e4d8; text-shadow: 0 1px 4px #000, 0 0 12px rgba(0,0,0,0.9); margin: 3px 0; animation: msgfade 4.5s forwards; }
+.dim { color: #a8cba8; }
+#score { font-size: 20px; font-weight: bold; color: #ffd84a; transition: transform 0.15s; }
+#score.pop { transform: scale(1.4); }
+#ammo { font-size: 15px; letter-spacing: 3px; color: #6fe06f; }
+#ammo.empty { color: #ff7a5c; }
+#rhint { font-size: 11px; color: #a8cba8; min-height: 14px; }
+#msgs { position: absolute; top: 17%; left: 0; right: 0; text-align: center; }
+.msg { font-size: 15px; font-weight: bold; color: #fff; text-shadow: 0 2px 6px #000; margin: 3px 0; animation: msgfade 4.5s forwards; }
 @keyframes msgfade { 0% { opacity: 0; transform: translateY(-6px); } 6% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
-#menu { position: fixed; inset: 0; z-index: 20; background: rgba(4,7,5,0.78); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #d8d4c8; }
+#banner { position: absolute; top: 26%; left: 0; right: 0; text-align: center; font-size: 38px; font-weight: bold;
+  color: #ffd84a; text-shadow: 0 0 18px rgba(255,180,40,0.9), 0 3px 6px #000; opacity: 0; transform: scale(0.6); pointer-events: none; }
+#banner.show { animation: bannerpop 1.6s forwards; }
+@keyframes bannerpop { 0% { opacity: 0; transform: scale(0.5); } 12% { opacity: 1; transform: scale(1.15); } 22% { transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: scale(1.05); } }
+.dmg { position: absolute; font-weight: bold; font-size: 20px; color: #fff; text-shadow: 0 2px 4px #000; pointer-events: none; animation: dmgfloat 1.1s forwards; }
+.dmg.gold { color: #ffd84a; font-size: 26px; text-shadow: 0 0 14px rgba(255,190,60,0.9), 0 2px 4px #000; }
+@keyframes dmgfloat { 0% { opacity: 0; transform: translate(-50%, 0) scale(0.6); } 12% { opacity: 1; transform: translate(-50%, -14px) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -70px) scale(1); } }
+#menu { position: fixed; inset: 0; z-index: 20; background: rgba(6,10,14,0.78); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #e8f0e8; }
 #menu.hidden { display: none; }
-#menu h1 { font-size: 52px; letter-spacing: 6px; color: #e8e4d8; margin: 0 0 6px; }
-#menu .sub { color: #57c457; margin-bottom: 28px; font-size: 14px; }
-#menu table { border-collapse: collapse; margin-bottom: 24px; font-size: 13px; }
+#menu h1 { font-size: 52px; letter-spacing: 6px; color: #ffd84a; text-shadow: 0 0 24px rgba(255,180,40,0.5); margin: 0 0 6px; }
+#menu .sub { color: #6fe06f; margin-bottom: 26px; font-size: 14px; }
+#menu table { border-collapse: collapse; margin-bottom: 22px; font-size: 13px; }
 #menu td { padding: 3px 12px; }
-#menu td:first-child { text-align: right; color: #9ab89a; }
-#menu .note { color: #9ab89a; font-size: 12px; margin-bottom: 4px; }
-#start { margin-top: 22px; background: rgba(87,196,87,0.12); color: #e8e4d8; border: 1px solid #57c457; border-radius: 6px; font: inherit; font-size: 17px; font-weight: bold; padding: 10px 34px; cursor: pointer; }
-#start:hover { background: rgba(87,196,87,0.28); }
-#err { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; color: #c46a57; background: #0a0a0a; font-size: 14px; padding: 20px; text-align: center; }
+#menu td:first-child { text-align: right; color: #a8cba8; }
+#menu .note { color: #a8cba8; font-size: 12px; margin-bottom: 4px; }
+#menu .note b { color: #ffd84a; }
+#start { margin-top: 20px; background: linear-gradient(180deg, rgba(255,216,74,0.25), rgba(255,160,40,0.15)); color: #ffe9a0; border: 2px solid #ffd84a; border-radius: 10px; font: inherit; font-size: 18px; font-weight: bold; padding: 12px 40px; cursor: pointer; }
+#start:hover { background: linear-gradient(180deg, rgba(255,216,74,0.45), rgba(255,160,40,0.3)); }
+#err { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; color: #ff8a6a; background: #0a0a0a; font-size: 14px; padding: 20px; text-align: center; }
 </style>
 </head>
 <body>
+<canvas id="gl"></canvas>
 <canvas id="overlay"></canvas>
 <div id="hud" style="display:none">
   <div class="panel" id="p-left">
@@ -46,7 +55,7 @@ canvas { display: block; }
     <div class="dim" id="wline2"></div>
   </div>
   <div class="panel" id="p-right">
-    <div id="score">SCORE 0</div>
+    <div id="score">0</div>
     <div class="dim" id="stats"></div>
   </div>
   <div class="panel" id="p-rifle">
@@ -55,13 +64,14 @@ canvas { display: block; }
     <div id="rhint"></div>
   </div>
   <div id="msgs"></div>
+  <div id="banner"></div>
 </div>
 <div id="menu">
   <h1>DEER HUNT</h1>
-  <div class="sub">securit.se wilderness &middot; real time &middot; real weather</div>
+  <div class="sub">securit.se arcade wilderness &middot; real time &middot; real weather</div>
   <table>
     <tr><td>mouse</td><td>look around</td></tr>
-    <tr><td>W A S D</td><td>walk</td></tr>
+    <tr><td>W A S D</td><td>run</td></tr>
     <tr><td>left button / F</td><td>fire</td></tr>
     <tr><td>right button / Q</td><td>scope (hold / toggle)</td></tr>
     <tr><td>arrow keys</td><td>fine aim</td></tr>
@@ -69,37 +79,33 @@ canvas { display: block; }
     <tr><td>1 / 2 / 3</td><td>choose rifle</td></tr>
     <tr><td>R</td><td>reload</td></tr>
     <tr><td>M</td><td>sound on / off</td></tr>
-    <tr><td>esc</td><td>back to this menu</td></tr>
   </table>
   <div class="note" id="menu-season"></div>
-  <div class="note">Deer are most active at dawn and dusk. Mind the wind and the bullet drop.</div>
+  <div class="note">Chain kills for streak bonuses. Shoot the supply balloon for ammo and points.</div>
+  <div class="note">The <b>golden deer</b> is legendary. Don't miss.</div>
   <div class="note" id="menu-best"></div>
-  <button id="start">&#9656; start hunting &#9666;</button>
+  <button id="start">&#9656; START HUNTING &#9666;</button>
 </div>
-<div id="err">WebGL is not available in this browser, so the hunt is off.<br>The deer live to see another day.</div>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-  }
+<div id="err">Could not load the 3D engine (WebGL or CDN unavailable).<br>The deer live to see another day.</div>
+<script src="https://cdn.jsdelivr.net/npm/babylonjs@8.56.2/babylon.js"
+        integrity="sha384-bJ7uvrJB0MXh1qhQouRHX/NbjOQywkt/ZxeFnrMiiFYG8InDFZlQdzVpAGaMhfwZ"
+        crossorigin="anonymous"></script>
+<script>
+(function() {
+'use strict';
+if (typeof BABYLON === 'undefined') {
+  document.getElementById('err').style.display = 'flex';
+  document.getElementById('menu').classList.add('hidden');
+  return;
 }
-</script>
-<script type="module">
-import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
-import { Water } from 'three/addons/objects/Water.js';
-import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ── Utils ───────────────────────────────────────────────────────────────
 const TAU = Math.PI * 2;
 const clamp = (x, a, b) => x < a ? a : (x > b ? b : x);
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const V3 = (x, y, z) => new BABYLON.Vector3(x, y, z);
+const C3 = hex => BABYLON.Color3.FromHexString(hex);
 
 function mulberry32(a) {
   return function() {
@@ -110,8 +116,6 @@ function mulberry32(a) {
   };
 }
 const R = mulberry32(20260711);
-
-// Value-noise fbm used for terrain and forest distribution
 function hash2(ix, iz) {
   let n = ix * 374761393 + iz * 668265263 + 1013904223;
   n = (n ^ (n >> 13)) * 1274126177;
@@ -130,18 +134,17 @@ function fbm(x, z) {
   return v;
 }
 
-// ── World / terrain shape ───────────────────────────────────────────────
-const WORLD_R = 1100;
+// ── World shape ─────────────────────────────────────────────────────────
 const POND = { x: 85, z: -70, r: 30 };
 function pondClear(x, z, margin) { return Math.hypot(x - POND.x, z - POND.z) > POND.r + (margin || 4); }
 function terrainH(x, z) {
   const r = Math.hypot(x, z);
   let h = fbm(x * 0.004 + 7, z * 0.004 + 3) * 16 + fbm(x * 0.025 + 2, z * 0.025 + 5) * 1.6;
-  h *= 0.3 + 0.7 * smooth(20, 150, r);           // flat glade around the stand
+  h *= 0.3 + 0.7 * smooth(20, 150, r);
   const rim = smooth(620, 1020, r);
   h += rim * rim * 300 * (0.55 + 0.45 * fbm(x * 0.0012 + 9, z * 0.0012 + 9));
   const pdx = x - POND.x, pdz = z - POND.z;
-  h -= 8 * Math.exp(-(pdx * pdx + pdz * pdz) / (POND.r * POND.r)); // pond basin
+  h -= 8 * Math.exp(-(pdx * pdx + pdz * pdz) / (POND.r * POND.r));
   return h;
 }
 function forestDensity(x, z) {
@@ -150,21 +153,31 @@ function forestDensity(x, z) {
   const clearings = smooth(0.30, 0.55, fbm(x * 0.006 + 5, z * 0.006 + 11));
   return ring * (0.15 + 0.85 * clearings);
 }
+function scatter(count, minR, maxR, accept) {
+  const out = [];
+  let guard = 0;
+  while (out.length < count && guard++ < count * 40) {
+    const a = R() * TAU, r = minR + Math.sqrt(R()) * (maxR - minR);
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (pondClear(x, z) && accept(x, z)) out.push([x, z]);
+  }
+  return out;
+}
 
-// ── Seasons (by real month) ─────────────────────────────────────────────
+// ── Seasons (real month) — arcade palette ───────────────────────────────
 const now0 = new Date();
 function seasonOf(m) { return (m === 11 || m <= 2) ? 0 : m <= 4 ? 1 : m <= 7 ? 2 : 3; }
 const seasonIdx = seasonOf(now0.getMonth());
 const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
 const PAL = [
-  { grass: 0xdfe4ea, grassLo: 0xb8c0cc, birch: 0x6b5a48, birchScale: 0.45, coat: 0x7e7060, snow: true },
-  { grass: 0x6f9a4a, grassLo: 0x4d7038, birch: 0x82a854, birchScale: 1.0, coat: 0x8e6c4a, snow: false },
-  { grass: 0x558238, grassLo: 0x3c642c, birch: 0x5c8c46, birchScale: 1.0, coat: 0x946e48, snow: false },
-  { grass: 0x8a6f38, grassLo: 0x6a542c, birch: 0xd08c2c, birchScale: 0.9, coat: 0x86684c, snow: false }
+  { g1: '#F2F6FB', g2: '#DCE6F2', spruce: '#3E7D5A', lolli: '#5FA872', birch: '#C8D8E8', snow: true },
+  { g1: '#83DD5B', g2: '#5FC444', spruce: '#2E8B4A', lolli: '#58C24E', birch: '#8FE05C', snow: false },
+  { g1: '#76D14E', g2: '#54B93B', spruce: '#2E8B4A', lolli: '#4FBA48', birch: '#7ED052', snow: false },
+  { g1: '#E9B455', g2: '#D08F35', spruce: '#3E7D4A', lolli: '#F09A3E', birch: '#F2B03C', snow: false }
 ];
 const pal = PAL[seasonIdx];
 
-// ── Sun / time ──────────────────────────────────────────────────────────
+// ── Sun / time (follows the system clock) ───────────────────────────────
 const sun = { alt: 0.5, dayT: 0.5, nightT: 0, sunrise: 6, sunset: 20, doy: 0, hours: 12 };
 function computeSun(now) {
   const start = new Date(now.getFullYear(), 0, 0);
@@ -190,8 +203,8 @@ function fmtH(h) {
   return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
 }
 
-// ── Weather ─────────────────────────────────────────────────────────────
-const wx = { cloud: 0.25, fog: 0.05, precip: 0, wind: 2, windDir: 0, tc: 0.25, tf: 0.05, tp: 0, tw: 2, timer: 1 };
+// ── Weather machine ─────────────────────────────────────────────────────
+const wx = { cloud: 0.25, fog: 0.05, precip: 0, wind: 2, tc: 0.25, tf: 0.05, tp: 0, tw: 2, timer: 1 };
 function pickWeather() {
   const r = Math.random();
   if (r < 0.30)      { wx.tc = 0.05 + Math.random() * 0.2; wx.tf = 0;    wx.tp = 0; }
@@ -233,644 +246,456 @@ function weatherName() {
 
 // ── Rifles ──────────────────────────────────────────────────────────────
 const RIFLES = [
-  { name: 'Lindqvist .243 Ranger', zoom: 3, mag: 5, reload: 1.6, cycle: 0.9, sway: 0.6, recoil: 0.5, vel: 880 },
-  { name: 'Fjällman .308 Classic', zoom: 5, mag: 4, reload: 2.2, cycle: 1.2, sway: 1.0, recoil: 1.0, vel: 820 },
-  { name: 'Bergström .338 Magnum', zoom: 8, mag: 3, reload: 3.0, cycle: 1.6, sway: 1.6, recoil: 1.8, vel: 900 }
+  { name: 'Lindqvist .243 Ranger', zoom: 3, mag: 5, reload: 1.6, cycle: 0.8, sway: 0.6, recoil: 0.5, vel: 880 },
+  { name: 'Fjällman .308 Classic', zoom: 5, mag: 4, reload: 2.2, cycle: 1.1, sway: 1.0, recoil: 1.0, vel: 820 },
+  { name: 'Bergström .338 Magnum', zoom: 8, mag: 3, reload: 3.0, cycle: 1.5, sway: 1.6, recoil: 1.8, vel: 900 }
 ];
 
-// ── Renderer & scene ────────────────────────────────────────────────────
-let renderer;
+// ── Engine / scene ──────────────────────────────────────────────────────
+const glEl = document.getElementById('gl');
+let engine;
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  engine = new BABYLON.Engine(glEl, true, { stencil: false }, true);
 } catch (e) {
   document.getElementById('err').style.display = 'flex';
   document.getElementById('menu').classList.add('hidden');
-  throw e;
+  return;
 }
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.6;
-renderer.domElement.id = 'gl';
-document.body.insertBefore(renderer.domElement, document.body.firstChild);
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+engine.setHardwareScalingLevel(1 / DPR);
+const scene = new BABYLON.Scene(engine);
+scene.clearColor = new BABYLON.Color4(0.3, 0.7, 1, 1);
+scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+scene.fogDensity = 0.0006;
+scene.skipPointerMovePicking = true;
 
-const scene = new THREE.Scene();
-const BASE_FOV = 70;
-const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.1, 6000);
-camera.rotation.order = 'YXZ';
+const BASE_FOV = 0.95;
+const camera = new BABYLON.FreeCamera('cam', V3(0, 2, 0), scene);
+camera.minZ = 0.1;
+camera.maxZ = 9000;
+camera.fov = BASE_FOV;
 
 const overlay = document.getElementById('overlay');
 const octx = overlay.getContext('2d');
-let W = 0, H = 0;
-let composer = null, bloomPass = null;
+let W = window.innerWidth, H = window.innerHeight;
 function resize() {
   W = window.innerWidth; H = window.innerHeight;
-  renderer.setSize(W, H);
-  camera.aspect = W / H;
-  camera.updateProjectionMatrix();
   overlay.width = W; overlay.height = H;
-  if (composer) composer.setSize(W, H);
+  engine.resize();
 }
 window.addEventListener('resize', resize);
 resize();
 
-// HDR pipeline: multisampled render target + subtle bloom
-{
-  const rt = new THREE.WebGLRenderTarget(W, H, { samples: 4, type: THREE.HalfFloatType });
-  composer = new EffectComposer(renderer, rt);
-  composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  composer.setSize(W, H);
-  composer.addPass(new RenderPass(scene, camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(W, H), 0.28, 0.55, 0.82);
-  composer.addPass(bloomPass);
-  composer.addPass(new OutputPass());
+// lights: one "celestial" light — the sun by day, the moon by night
+const hemi = new BABYLON.HemisphericLight('hemi', V3(0, 1, 0), scene);
+hemi.intensity = 0.8;
+const celestial = new BABYLON.DirectionalLight('cel', V3(0, -1, 0), scene);
+celestial.intensity = 1.1;
+celestial.autoUpdateExtends = false;
+celestial.orthoLeft = -170; celestial.orthoRight = 170;
+celestial.orthoTop = 170; celestial.orthoBottom = -170;
+celestial.shadowMinZ = 5; celestial.shadowMaxZ = 900;
+const shadowGen = new BABYLON.ShadowGenerator(2048, celestial);
+shadowGen.usePercentageCloserFiltering = true;
+shadowGen.bias = 0.002;
+shadowGen.normalBias = 0.02;
+
+const glow = new BABYLON.GlowLayer('glow', scene, { mainTextureRatio: 0.5 });
+glow.intensity = 0.7;
+
+// ── Sky dome (stylized gradient shader) ─────────────────────────────────
+BABYLON.Effect.ShadersStore.skydomeVertexShader = [
+  'precision highp float;',
+  'attribute vec3 position;',
+  'uniform mat4 worldViewProjection;',
+  'varying vec3 vDir;',
+  'void main() { vDir = position; gl_Position = worldViewProjection * vec4(position, 1.0); }'
+].join('\n');
+BABYLON.Effect.ShadersStore.skydomeFragmentShader = [
+  'precision highp float;',
+  'varying vec3 vDir;',
+  'uniform vec3 topColor;',
+  'uniform vec3 horColor;',
+  'void main() {',
+  '  float y = normalize(vDir).y;',
+  '  float k = pow(clamp(y, 0.0, 1.0), 0.55);',
+  '  vec3 c = mix(horColor, topColor, k);',
+  '  if (y < 0.0) c = mix(horColor, horColor * 0.5, clamp(-y * 5.0, 0.0, 1.0));',
+  '  gl_FragColor = vec4(c, 1.0);',
+  '}'
+].join('\n');
+const skyMat = new BABYLON.ShaderMaterial('skyMat', scene, 'skydome',
+  { attributes: ['position'], uniforms: ['worldViewProjection', 'topColor', 'horColor'] });
+skyMat.backFaceCulling = false;
+skyMat.disableDepthWrite = true;
+const dome = BABYLON.MeshBuilder.CreateSphere('dome', { diameter: 8000, segments: 12 }, scene);
+dome.material = skyMat;
+dome.infiniteDistance = true;
+dome.isPickable = false;
+dome.applyFog = false;
+
+// sun & moon discs (emissive → they bloom via the glow layer)
+function discMesh(name, size, hex) {
+  const m = BABYLON.MeshBuilder.CreatePlane(name, { size }, scene);
+  const mat = new BABYLON.StandardMaterial(name + 'M', scene);
+  mat.emissiveColor = C3(hex);
+  mat.disableLighting = true;
+  mat.diffuseColor = C3('#000000');
+  m.material = mat;
+  m.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  m.isPickable = false;
+  m.applyFog = false;
+  return m;
 }
+const sunDisc = discMesh('sunDisc', 260, '#FFE9A8');
+const moonDisc = discMesh('moonDisc', 170, '#E8F0FF');
 
-scene.fog = new THREE.FogExp2(0xc8d4e0, 0.001);
-
-// Sky, sun, moon, stars
-const sky = new Sky();
-sky.scale.setScalar(50000);
-scene.add(sky);
-const skyU = sky.material.uniforms;
-skyU.turbidity.value = 8;
-skyU.rayleigh.value = 1.6;
-skyU.mieCoefficient.value = 0.005;
-skyU.mieDirectionalG.value = 0.8;
-
-// Image-based lighting: the sky is baked to an environment map (PMREM)
-// and refreshed periodically as the sun moves and the weather changes.
-const pmrem = new THREE.PMREMGenerator(renderer);
-const envScene = new THREE.Scene();
-const envSky = new Sky();
-envSky.material = sky.material;
-envSky.scale.setScalar(50000);
-envScene.add(envSky);
-let envRT = null, envTimer = 0;
-function refreshEnv() {
-  const old = envRT;
-  envRT = pmrem.fromScene(envScene, 0, 10, 80000);
-  scene.environment = envRT.texture;
-  if (old) old.dispose();
-}
-
-const sunLight = new THREE.DirectionalLight(0xfff2dd, 2);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
-sunLight.shadow.camera.left = -150; sunLight.shadow.camera.right = 150;
-sunLight.shadow.camera.top = 150; sunLight.shadow.camera.bottom = -150;
-sunLight.shadow.camera.near = 10; sunLight.shadow.camera.far = 900;
-sunLight.shadow.bias = -0.0004;
-sunLight.shadow.normalBias = 0.02;
-scene.add(sunLight);
-scene.add(sunLight.target);
-
-const moonLight = new THREE.DirectionalLight(0x8fa4cc, 0);
-scene.add(moonLight);
-scene.add(moonLight.target);
-const hemi = new THREE.HemisphereLight(0xbcd4ee, 0x4a5a3a, 0.5);
-scene.add(hemi);
-const flashLight = new THREE.PointLight(0xffddaa, 0, 60); // muzzle flash
-scene.add(flashLight);
-
-const starGeo = new THREE.BufferGeometry();
-{
-  const pts = new Float32Array(1200 * 3);
-  for (let i = 0; i < 1200; i++) {
-    const a = R() * TAU, e = Math.asin(R() * 0.95);
-    const r = 4500;
-    pts[i * 3] = Math.cos(a) * Math.cos(e) * r;
-    pts[i * 3 + 1] = Math.sin(e) * r + 100;
-    pts[i * 3 + 2] = Math.sin(a) * Math.cos(e) * r;
+// stars: a merged cloud of tiny emissive quads on the dome
+const starMesh = (() => {
+  const quads = [];
+  for (let i = 0; i < 240; i++) {
+    const q = BABYLON.MeshBuilder.CreatePlane('st', { size: 4 + R() * 5 }, scene);
+    const a = R() * TAU, e = 0.08 + R() * 1.35;
+    const rr = 3600;
+    q.position = V3(Math.cos(a) * Math.cos(e) * rr, Math.sin(e) * rr, Math.sin(a) * Math.cos(e) * rr);
+    q.rotation.y = R() * TAU;
+    q.rotation.x = R() * TAU;
+    quads.push(q);
   }
-  starGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-}
-const starMat = new THREE.PointsMaterial({ color: 0xdde4ff, size: 5, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false });
-const stars = new THREE.Points(starGeo, starMat);
-scene.add(stars);
+  const merged = BABYLON.Mesh.MergeMeshes(quads, true, true);
+  const mat = new BABYLON.StandardMaterial('starM', scene);
+  mat.emissiveColor = C3('#DDE6FF');
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mat.alpha = 0;
+  merged.material = mat;
+  merged.infiniteDistance = true;
+  merged.isPickable = false;
+  merged.applyFog = false;
+  return merged;
+})();
 
-function discTexture(inner, outer) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d');
-  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grad.addColorStop(0, inner);
-  grad.addColorStop(1, outer);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
-}
-const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-  map: discTexture('rgba(235,238,248,1)', 'rgba(235,238,248,0)'),
-  transparent: true, opacity: 0, depthWrite: false, fog: false
-}));
-moonSprite.scale.setScalar(260);
-scene.add(moonSprite);
-
-// Clouds: soft billboard sprites drifting with the wind
-const cloudTex = (() => {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 128;
-  const g = c.getContext('2d');
-  for (let i = 0; i < 38; i++) {
-    const x = 30 + Math.random() * 196, y = 42 + Math.random() * 48, r = 12 + Math.random() * 32;
+// clouds: puffy billboards
+const cloudTexture = (() => {
+  const dt = new BABYLON.DynamicTexture('cloudT', { width: 256, height: 128 }, scene, false);
+  const g = dt.getContext();
+  g.clearRect(0, 0, 256, 128);
+  for (let i = 0; i < 40; i++) {
+    const x = 34 + Math.random() * 188, y = 46 + Math.random() * 44, r = 14 + Math.random() * 30;
     const grad = g.createRadialGradient(x, y - 8, 0, x, y, r);
-    grad.addColorStop(0, 'rgba(255,255,255,' + (0.10 + Math.random() * 0.12) + ')');
+    grad.addColorStop(0, 'rgba(255,255,255,0.55)');
     grad.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = grad;
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
   }
-  return new THREE.CanvasTexture(c);
+  dt.update();
+  dt.hasAlpha = true;
+  return dt;
 })();
-const cloudSprites = [];
-for (let i = 0; i < 20; i++) {
-  const m = new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0, depthWrite: false });
-  const s = new THREE.Sprite(m);
-  const a = R() * TAU, r = 300 + R() * 1600;
-  s.position.set(Math.cos(a) * r, 260 + R() * 220, Math.sin(a) * r);
-  s.scale.set(500 + R() * 700, 130 + R() * 160, 1);
-  s.userData.drift = 0.5 + R();
-  scene.add(s);
-  cloudSprites.push(s);
+const clouds = [];
+for (let i = 0; i < 14; i++) {
+  const c = BABYLON.MeshBuilder.CreatePlane('cloud' + i, { width: 420 + R() * 380, height: 130 + R() * 110 }, scene);
+  const mat = new BABYLON.StandardMaterial('cloudM' + i, scene);
+  mat.diffuseTexture = cloudTexture;
+  mat.emissiveColor = C3('#FFFFFF');
+  mat.disableLighting = true;
+  mat.useAlphaFromDiffuseTexture = true;
+  mat.backFaceCulling = false;
+  c.material = mat;
+  c.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  const a = R() * TAU, r = 400 + R() * 1500;
+  c.position = V3(Math.cos(a) * r, 280 + R() * 200, Math.sin(a) * r);
+  c.isPickable = false;
+  c.applyFog = false;
+  c.visibility = 0;
+  c.metadata = { drift: 0.5 + R() };
+  clouds.push(c);
 }
 
-// ── Terrain mesh ────────────────────────────────────────────────────────
-const [groundTex, groundBump] = (() => {
-  const c = document.createElement('canvas');
-  c.width = c.height = 512;
-  const g = c.getContext('2d');
-  g.fillStyle = '#8b8b8b';
-  g.fillRect(0, 0, 512, 512);
-  // broad soft patches for macro variation
-  for (let i = 0; i < 60; i++) {
-    const x = Math.random() * 512, y = Math.random() * 512, r = 30 + Math.random() * 90;
-    const v = 110 + Math.random() * 60 | 0;
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, 'rgba(' + v + ',' + v + ',' + v + ',0.35)');
-    grad.addColorStop(1, 'rgba(' + v + ',' + v + ',' + v + ',0)');
-    g.fillStyle = grad;
-    g.fillRect(x - r, y - r, r * 2, r * 2);
-  }
-  // fine speckle
-  for (let i = 0; i < 26000; i++) {
-    const v = 95 + Math.random() * 105 | 0;
-    g.fillStyle = 'rgba(' + v + ',' + v + ',' + v + ',0.8)';
-    g.fillRect(Math.random() * 512, Math.random() * 512, 1 + Math.random() * 2, 1 + Math.random() * 2);
-  }
-  // short blade strokes
-  for (let i = 0; i < 5200; i++) {
-    const v = 105 + Math.random() * 95 | 0;
-    g.strokeStyle = 'rgba(' + v + ',' + v + ',' + v + ',0.6)';
-    g.lineWidth = 1;
-    const x = Math.random() * 512, y = Math.random() * 512, a = Math.random() * TAU;
-    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * 5, y + Math.sin(a) * 5 - 3); g.stroke();
-  }
-  const cb = document.createElement('canvas');
-  cb.width = cb.height = 512;
-  cb.getContext('2d').drawImage(c, 0, 0);
-  const mkTex = cv => {
-    const t = new THREE.CanvasTexture(cv);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(140, 140);
-    return t;
-  };
-  return [mkTex(c), mkTex(cb)];
-})();
-
-const TSEG = 240, TSIZE = WORLD_R * 2.2;
-const terrainGeo = new THREE.PlaneGeometry(TSIZE, TSIZE, TSEG, TSEG);
-terrainGeo.rotateX(-Math.PI / 2);
+// ── Terrain ─────────────────────────────────────────────────────────────
+const terrain = BABYLON.MeshBuilder.CreateGround('terrain', { width: 2200, height: 2200, subdivisions: 220, updatable: true }, scene);
 {
-  const pos = terrainGeo.attributes.position;
-  const colors = new Float32Array(pos.count * 3);
-  const cGrass = new THREE.Color(pal.grass), cGrassLo = new THREE.Color(pal.grassLo);
-  const cRock = new THREE.Color(0x7d7d84), cSnow = new THREE.Color(0xe8ecf2);
-  const col = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
+  const pos = terrain.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+  const colors = new Float32Array(pos.length / 3 * 4);
+  const cG1 = C3(pal.g1), cG2 = C3(pal.g2);
+  const cRock = C3('#8B7BC8'), cSnow = C3('#F4F8FF'), cSand = C3('#E8D48A');
+  for (let i = 0; i < pos.length / 3; i++) {
+    const x = pos[i * 3], z = pos[i * 3 + 2];
     const h = terrainH(x, z);
-    pos.setY(i, h);
-    const n = fbm(x * 0.01 + 3, z * 0.01 + 8);
-    col.copy(cGrass).lerp(cGrassLo, n);
-    if (h > 55) col.lerp(cRock, smooth(55, 110, h));
-    if (h > 140 || pal.snow) col.lerp(cSnow, pal.snow ? 0.85 : smooth(140, 200, h));
-    colors[i * 3] = col.r; colors[i * 3 + 1] = col.g; colors[i * 3 + 2] = col.b;
+    pos[i * 3 + 1] = h;
+    // playful two-tone grass patches
+    const n = fbm(x * 0.02 + 3, z * 0.02 + 8);
+    const tt = smooth(0.42, 0.58, n);
+    let r = lerp(cG2.r, cG1.r, tt);
+    let g = lerp(cG2.g, cG1.g, tt);
+    let b = lerp(cG2.b, cG1.b, tt);
+    if (h > 55) { const t = smooth(55, 110, h); r = lerp(r, cRock.r, t); g = lerp(g, cRock.g, t); b = lerp(b, cRock.b, t); }
+    if (h > 140) { const t = smooth(140, 200, h); r = lerp(r, cSnow.r, t); g = lerp(g, cSnow.g, t); b = lerp(b, cSnow.b, t); }
+    const pd = Math.hypot(x - POND.x, z - POND.z);
+    if (pd < POND.r + 5) { const t = 1 - smooth(POND.r - 2, POND.r + 5, pd); r = lerp(r, cSand.r, t); g = lerp(g, cSand.g, t); b = lerp(b, cSand.b, t); }
+    colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b; colors[i * 4 + 3] = 1;
   }
-  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  terrainGeo.computeVertexNormals();
+  terrain.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos);
+  const norms = [];
+  BABYLON.VertexData.ComputeNormals(pos, terrain.getIndices(), norms);
+  terrain.updateVerticesData(BABYLON.VertexBuffer.NormalKind, norms);
+  terrain.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
 }
-const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({
-  map: groundTex, bumpMap: groundBump, bumpScale: 0.35, vertexColors: true, roughness: 1, metalness: 0
-}));
-terrain.receiveShadow = true;
-scene.add(terrain);
+const terrainMat = new BABYLON.StandardMaterial('terrainM', scene);
+terrainMat.diffuseColor = C3('#FFFFFF');
+terrainMat.specularColor = C3('#000000');
+terrain.material = terrainMat;
+terrain.receiveShadows = true;
+terrain.isPickable = false;
 
-// ── Vegetation (instanced) ──────────────────────────────────────────────
-const tmpM = new THREE.Matrix4(), tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpE = new THREE.Euler();
-
-function scatter(count, minR, maxR, accept) {
-  const out = [];
-  let guard = 0;
-  while (out.length < count && guard++ < count * 40) {
-    const a = R() * TAU, r = minR + Math.sqrt(R()) * (maxR - minR);
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (pondClear(x, z) && accept(x, z)) out.push([x, z]);
-  }
-  return out;
-}
-
-function makeInstanced(geo, mat, spots, opts) {
-  const o = opts || {};
-  const inst = new THREE.InstancedMesh(geo, mat, spots.length);
-  const c = new THREE.Color();
-  spots.forEach(([x, z], i) => {
-    const s = lerp(o.sMin || 1, o.sMax || 1, R());
-    tmpP.set(x, terrainH(x, z) + (o.yOff || 0) * s, z);
-    tmpE.set(o.tilt ? (R() - 0.5) * o.tilt : 0, R() * TAU, o.tilt ? (R() - 0.5) * o.tilt : 0);
-    tmpQ.setFromEuler(tmpE);
-    tmpS.set(s, s * (0.85 + R() * 0.3), s);
-    tmpM.compose(tmpP, tmpQ, tmpS);
-    inst.setMatrixAt(i, tmpM);
-    if (o.color !== undefined) {
-      c.set(o.color).offsetHSL((R() - 0.5) * 0.03, (R() - 0.5) * 0.14, (R() - 0.5) * (o.lumVar || 0.07));
-      inst.setColorAt(i, c);
-    }
-  });
-  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-  inst.castShadow = !!o.shadow;
-  inst.instanceMatrix.needsUpdate = true;
-  scene.add(inst);
-  return inst;
-}
-
-// organic jitter so no two silhouettes read as identical cones/blobs
-function jitterGeo(geo, amt) {
-  const p = geo.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    p.setXYZ(i,
-      p.getX(i) + (hash2(i, 11) - 0.5) * amt,
-      p.getY(i) + (hash2(i, 23) - 0.5) * amt * 0.6,
-      p.getZ(i) + (hash2(i, 37) - 0.5) * amt);
-  }
-  geo.computeVertexNormals();
-  return geo;
-}
-
-const barkMat = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 1 });
-const folMat = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
-
-// Spruces — the backbone of the forest
-const spruceSpots = scatter(3000, 55, 880, (x, z) => R() < forestDensity(x, z))
-  .concat(scatter(14, 26, 150, () => R() < 0.6));
-const spruceFol = jitterGeo(BufferGeometryUtils.mergeGeometries([
-  new THREE.ConeGeometry(3.1, 4.2, 8).translate(0, 4.2, 0),
-  new THREE.ConeGeometry(2.55, 3.9, 8).translate(0, 6.3, 0),
-  new THREE.ConeGeometry(1.95, 3.5, 8).translate(0, 8.4, 0),
-  new THREE.ConeGeometry(1.25, 3.0, 8).translate(0, 10.4, 0)
-]), 0.55);
-makeInstanced(spruceFol, folMat(), spruceSpots,
-  { sMin: 0.55, sMax: 1.8, shadow: true, color: pal.snow ? 0x33493c : 0x2f5238, lumVar: 0.10 });
-makeInstanced(new THREE.CylinderGeometry(0.22, 0.36, 3.4, 7).translate(0, 1.6, 0), barkMat, spruceSpots,
-  { sMin: 0.55, sMax: 1.8 });
-
-// Scots pines — tall bare trunks with wind-blown crowns
-const pineSpots = scatter(420, 70, 850, (x, z) => R() < forestDensity(x, z) * 0.7)
-  .concat(scatter(8, 30, 160, () => R() < 0.5));
-const pineCrown = jitterGeo(BufferGeometryUtils.mergeGeometries([
-  new THREE.IcosahedronGeometry(2.6, 1).scale(1.25, 0.55, 1.25).translate(0, 11.6, 0),
-  new THREE.IcosahedronGeometry(1.9, 1).scale(1.15, 0.5, 1.15).translate(1.7, 10.6, 0.5),
-  new THREE.IcosahedronGeometry(1.6, 1).scale(1.1, 0.5, 1.1).translate(-1.6, 10.9, -0.6)
-]), 0.5);
-makeInstanced(pineCrown, folMat(), pineSpots,
-  { sMin: 0.7, sMax: 1.5, shadow: true, color: pal.snow ? 0x3c5844 : 0x3d6b42, lumVar: 0.09 });
-makeInstanced(new THREE.CylinderGeometry(0.2, 0.42, 11.5, 7).translate(0, 5.6, 0),
-  new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 1 }), pineSpots,
-  { sMin: 0.7, sMax: 1.5, shadow: true });
-
-// Birches
-const birchSpots = scatter(700, 60, 720, (x, z) => R() < forestDensity(x, z) * 0.85)
-  .concat(scatter(10, 24, 140, () => R() < 0.5));
-const birchFol = jitterGeo(BufferGeometryUtils.mergeGeometries([
-  new THREE.IcosahedronGeometry(2.3, 1).translate(0, 7.6, 0),
-  new THREE.IcosahedronGeometry(1.6, 1).translate(-1.5, 6.3, 0.5),
-  new THREE.IcosahedronGeometry(1.5, 1).translate(1.4, 6.6, -0.5),
-  new THREE.IcosahedronGeometry(1.2, 1).translate(0.3, 8.9, 0.4)
-]), 0.5);
-{
-  const inst = new THREE.InstancedMesh(birchFol, folMat(), birchSpots.length);
-  const c = new THREE.Color();
-  birchSpots.forEach(([x, z], i) => {
-    const s = lerp(0.65, 1.45, R()) * pal.birchScale;
-    tmpP.set(x, terrainH(x, z), z);
-    tmpE.set(0, R() * TAU, 0);
-    tmpQ.setFromEuler(tmpE);
-    tmpS.set(s, s * (0.9 + R() * 0.25), s);
-    tmpM.compose(tmpP, tmpQ, tmpS);
-    inst.setMatrixAt(i, tmpM);
-    c.set(pal.birch).offsetHSL((R() - 0.5) * 0.04, (R() - 0.5) * 0.15, (R() - 0.5) * 0.08);
-    inst.setColorAt(i, c);
-  });
-  inst.instanceColor.needsUpdate = true;
-  inst.castShadow = true;
-  inst.instanceMatrix.needsUpdate = true;
-  scene.add(inst);
-}
-makeInstanced(new THREE.CylinderGeometry(0.13, 0.2, 7.2, 7).translate(0, 3.5, 0),
-  new THREE.MeshStandardMaterial({ color: 0xe4e2da, roughness: 0.9 }), birchSpots,
-  { sMin: 0.65, sMax: 1.45, shadow: true });
-
-// Understory: bushes, fallen logs, stumps
-const bushSpots = scatter(650, 45, 750, (x, z) => R() < 0.25 + forestDensity(x, z) * 0.6);
-makeInstanced(jitterGeo(BufferGeometryUtils.mergeGeometries([
-  new THREE.IcosahedronGeometry(1.0, 1).scale(1.3, 0.75, 1.3).translate(0, 0.55, 0),
-  new THREE.IcosahedronGeometry(0.7, 1).scale(1.2, 0.7, 1.2).translate(0.9, 0.4, 0.3),
-  new THREE.IcosahedronGeometry(0.6, 1).scale(1.2, 0.7, 1.2).translate(-0.8, 0.42, -0.3)
-]), 0.3), folMat(), bushSpots,
-  { sMin: 0.5, sMax: 1.4, shadow: true, color: pal.snow ? 0x717a70 : 0x39592f, lumVar: 0.1 });
-
-const logSpots = scatter(130, 40, 700, (x, z) => R() < 0.2 + forestDensity(x, z) * 0.5);
-{
-  const inst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.28, 0.36, 6, 7), barkMat, logSpots.length);
-  logSpots.forEach(([x, z], i) => {
-    const s = 0.6 + R() * 1.1;
-    tmpP.set(x, terrainH(x, z) + 0.25 * s, z);
-    tmpE.set((R() - 0.5) * 0.2, R() * TAU, Math.PI / 2 + (R() - 0.5) * 0.2);
-    tmpQ.setFromEuler(tmpE);
-    tmpS.set(s, s, s);
-    tmpM.compose(tmpP, tmpQ, tmpS);
-    inst.setMatrixAt(i, tmpM);
-  });
-  inst.castShadow = true;
-  inst.instanceMatrix.needsUpdate = true;
-  scene.add(inst);
-}
-makeInstanced(new THREE.CylinderGeometry(0.42, 0.5, 0.7, 8).translate(0, 0.35, 0),
-  new THREE.MeshStandardMaterial({ color: 0x6a5038, roughness: 1 }),
-  scatter(110, 40, 650, (x, z) => R() < 0.15 + forestDensity(x, z) * 0.4),
-  { sMin: 0.6, sMax: 1.3, shadow: true });
-
-// Boulders — bare granite and mossy stones
-makeInstanced(new THREE.DodecahedronGeometry(1.4, 0),
-  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true }),
-  scatter(240, 25, 820, () => true),
-  { sMin: 0.35, sMax: 2.4, yOff: 0.15, tilt: 0.5, shadow: true, color: pal.snow ? 0xb8bcc6 : 0x84887e, lumVar: 0.12 });
-
-// Grass, ferns and flowers — vertex-shader wind sway
-const windUniforms = { uTime: { value: 0 }, uWind: { value: 1 } };
-function addSway(mat, strength) {
-  mat.onBeforeCompile = sh => {
-    sh.uniforms.uTime = windUniforms.uTime;
-    sh.uniforms.uWind = windUniforms.uWind;
-    sh.vertexShader = 'uniform float uTime;\nuniform float uWind;\n' + sh.vertexShader.replace(
-      '#include <begin_vertex>',
-      ['#include <begin_vertex>',
-       '#ifdef USE_INSTANCING',
-       '  vec4 dhWp = instanceMatrix * vec4(transformed, 1.0);',
-       '  float dhSw = uv.y * uWind * ' + strength.toFixed(2) + ';',
-       '  transformed.x += sin(uTime * 2.1 + dhWp.x * 0.6 + dhWp.z * 0.8) * dhSw;',
-       '  transformed.z += cos(uTime * 1.7 + dhWp.x * 0.8 + dhWp.z * 0.5) * dhSw * 0.6;',
-       '#endif'].join('\n')
-    );
-  };
-  return mat;
-}
-
-const bladeTex = (() => {
-  const c = document.createElement('canvas');
-  c.width = 64; c.height = 128;
-  const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 128, 0, 20);
-  grad.addColorStop(0, 'rgba(200,200,200,0.9)');
-  grad.addColorStop(1, 'rgba(255,255,255,1)');
-  g.strokeStyle = grad;
-  for (let i = 0; i < 12; i++) {
-    const x0 = 3 + i * 5;
-    g.lineWidth = 2 + Math.random() * 2;
-    g.beginPath();
-    g.moveTo(x0, 128);
-    g.quadraticCurveTo(x0 + (Math.random() - 0.5) * 16, 62, x0 + (Math.random() - 0.5) * 30, 4 + Math.random() * 34);
-    g.stroke();
-  }
-  return new THREE.CanvasTexture(c);
-})();
-const tuftGeo = BufferGeometryUtils.mergeGeometries([
-  new THREE.PlaneGeometry(1.2, 0.9).translate(0, 0.45, 0),
-  new THREE.PlaneGeometry(1.2, 0.9).rotateY(Math.PI / 3).translate(0, 0.45, 0),
-  new THREE.PlaneGeometry(1.2, 0.9).rotateY(-Math.PI / 3).translate(0, 0.45, 0)
-]);
-const grassMat = addSway(new THREE.MeshStandardMaterial({
-  map: bladeTex, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1
-}), 0.16);
-makeInstanced(tuftGeo, grassMat, scatter(8500, 4, 300, (x, z) => forestDensity(x, z) < 0.3),
-  { sMin: 0.5, sMax: 1.7, color: pal.snow ? 0xb9c2cc : pal.grassLo, lumVar: 0.12 });
-
-const fernMat = addSway(new THREE.MeshStandardMaterial({
-  map: bladeTex, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1
-}), 0.10);
-makeInstanced(tuftGeo, fernMat, scatter(1400, 55, 620, (x, z) => forestDensity(x, z) > 0.12),
-  { sMin: 0.8, sMax: 2.0, color: pal.snow ? 0x8f978f : 0x2e5230, lumVar: 0.08 });
-
-if (!pal.snow && seasonIdx !== 3) {
-  // meadow flowers in spring and summer
-  const flowerTex = (() => {
-    const c = document.createElement('canvas');
-    c.width = c.height = 64;
-    const g = c.getContext('2d');
-    g.strokeStyle = 'rgba(120,160,90,0.9)';
-    g.lineWidth = 3;
-    g.beginPath(); g.moveTo(32, 64); g.lineTo(32, 26); g.stroke();
-    g.fillStyle = 'rgba(255,255,255,0.95)';
-    for (let i = 0; i < 6; i++) {
-      const a = i / 6 * TAU;
-      g.beginPath(); g.arc(32 + Math.cos(a) * 9, 22 + Math.sin(a) * 9, 7, 0, TAU); g.fill();
-    }
-    g.fillStyle = 'rgba(255,220,80,1)';
-    g.beginPath(); g.arc(32, 22, 6, 0, TAU); g.fill();
-    return new THREE.CanvasTexture(c);
-  })();
-  const flowerGeo = BufferGeometryUtils.mergeGeometries([
-    new THREE.PlaneGeometry(0.5, 0.5).translate(0, 0.25, 0),
-    new THREE.PlaneGeometry(0.5, 0.5).rotateY(Math.PI / 2).translate(0, 0.25, 0)
-  ]);
-  const flowerMat = addSway(new THREE.MeshStandardMaterial({
-    map: flowerTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1
-  }), 0.05);
-  makeInstanced(flowerGeo, flowerMat, scatter(800, 6, 240, (x, z) => forestDensity(x, z) < 0.2),
-    { sMin: 0.6, sMax: 1.3, color: 0xffffff, lumVar: 0.05 });
-}
-
-if (seasonIdx === 3) {
-  // autumn mushrooms on the forest floor
-  const shroomGeo = BufferGeometryUtils.mergeGeometries([
-    new THREE.CylinderGeometry(0.05, 0.07, 0.22, 6).translate(0, 0.11, 0),
-    new THREE.SphereGeometry(0.14, 8, 6, 0, TAU, 0, Math.PI / 2).translate(0, 0.2, 0)
-  ], true);
-  makeInstanced(shroomGeo, [
-    new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: 1 }),
-    new THREE.MeshStandardMaterial({ color: 0xb83a28, roughness: 0.7 })
-  ], scatter(150, 50, 500, (x, z) => forestDensity(x, z) > 0.15), { sMin: 0.6, sMax: 1.4 });
-}
-
-// ── Pond with real reflections ──────────────────────────────────────────
-const waterNormalTex = (() => {
-  const S = 256;
-  const cnv = document.createElement('canvas');
-  cnv.width = cnv.height = S;
-  const g = cnv.getContext('2d');
-  const img = g.createImageData(S, S);
-  const waves = [];
-  for (let k = 0; k < 10; k++) waves.push({ a: 1 + (k % 4), b: 1 + ((k * 7) % 5), ph: R() * TAU, amp: 1 / (1 + k * 0.6) });
-  const hgt = (u, v) => {
-    let h = 0;
-    for (const w of waves) h += Math.sin(TAU * (w.a * u + w.b * v) + w.ph) * w.amp;
-    return h;
-  };
-  const e = 1 / S;
-  for (let j = 0; j < S; j++) {
-    for (let i = 0; i < S; i++) {
-      const u = i / S, v = j / S;
-      const dx = (hgt(u + e, v) - hgt(u - e, v)) * 2;
-      const dy = (hgt(u, v + e) - hgt(u, v - e)) * 2;
-      const inv = 1 / Math.hypot(dx, dy, 1);
-      const o = (j * S + i) * 4;
-      img.data[o] = (-dx * inv * 0.5 + 0.5) * 255;
-      img.data[o + 1] = (-dy * inv * 0.5 + 0.5) * 255;
-      img.data[o + 2] = (inv * 0.5 + 0.5) * 255;
-      img.data[o + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(cnv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
-})();
+// ── Pond (stylized shiny water + foam ring) ─────────────────────────────
 const waterY = terrainH(POND.x, POND.z) + 5;
-const water = new Water(new THREE.CircleGeometry(POND.r * 1.02, 48), {
-  textureWidth: 512, textureHeight: 512,
-  waterNormals: waterNormalTex,
-  sunDirection: new THREE.Vector3(0, 1, 0),
-  sunColor: 0xffffff,
-  waterColor: 0x1e3a3f,
-  distortionScale: 1.8,
-  fog: true
-});
-water.rotation.x = -Math.PI / 2;
-water.position.set(POND.x, waterY, POND.z);
-scene.add(water);
+const water = BABYLON.MeshBuilder.CreateDisc('water', { radius: POND.r * 1.02, tessellation: 48 }, scene);
+water.rotation.x = Math.PI / 2;
+water.position = V3(POND.x, waterY, POND.z);
+const waterMat = new BABYLON.StandardMaterial('waterM', scene);
+waterMat.diffuseColor = C3('#35C1E8');
+waterMat.emissiveColor = C3('#0E4E66');
+waterMat.specularColor = C3('#AFFFFF');
+waterMat.specularPower = 64;
+waterMat.alpha = 0.88;
+waterMat.backFaceCulling = false;
+water.material = waterMat;
+water.isPickable = false;
+const foam = BABYLON.MeshBuilder.CreateTorus('foam', { diameter: POND.r * 1.9, thickness: 1.4, tessellation: 48 }, scene);
+foam.position = V3(POND.x, waterY + 0.1, POND.z);
+foam.scaling.y = 0.12;
+const foamMat = new BABYLON.StandardMaterial('foamM', scene);
+foamMat.diffuseColor = C3('#FFFFFF');
+foamMat.emissiveColor = C3('#9FDFEF');
+foamMat.specularColor = C3('#000000');
+foam.material = foamMat;
+foam.isPickable = false;
 
-// ── Deer ────────────────────────────────────────────────────────────────
-const coatMat = new THREE.MeshStandardMaterial({ color: pal.coat, roughness: 0.95 });
-const coatDark = new THREE.MeshStandardMaterial({ color: new THREE.Color(pal.coat).multiplyScalar(0.55), roughness: 1 });
-const coatLight = new THREE.MeshStandardMaterial({ color: new THREE.Color(pal.coat).lerp(new THREE.Color(0xfff8ec), 0.5), roughness: 0.95 });
-const antlerMat = new THREE.MeshStandardMaterial({ color: 0xb09a72, roughness: 0.85 });
-const coatVariants = [];
-for (let i = 0; i < 4; i++) {
-  const f = 0.85 + i * 0.1;
-  const set = { coat: coatMat.clone(), dark: coatDark.clone(), light: coatLight.clone() };
-  set.coat.color.multiplyScalar(f);
-  set.dark.color.multiplyScalar(f);
-  set.light.color.multiplyScalar(f);
-  coatVariants.push(set);
+// ── Vegetation (thin instances, chunky low-poly) ────────────────────────
+function flatMat(hex, emissive) {
+  const m = new BABYLON.StandardMaterial('m' + hex, scene);
+  m.diffuseColor = C3(hex);
+  m.specularColor = C3('#000000');
+  if (emissive) m.emissiveColor = C3(hex).scale(emissive);
+  return m;
 }
-
-function buildDeerTemplate() {
-  const g = new THREE.Group();
-  const add = (mesh, zone) => { mesh.castShadow = true; mesh.userData.zone = zone; return mesh; };
-
-  const body = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.30, 0.72, 4, 12), coatMat), 'body');
-  body.rotation.z = Math.PI / 2;
-  body.position.set(-0.05, 1.0, 0);
-  g.add(body);
-  const chest = add(new THREE.Mesh(new THREE.SphereGeometry(0.30, 10, 8), coatMat), 'vital');
-  chest.position.set(0.38, 0.98, 0);
-  chest.scale.set(1.1, 1, 0.95);
-  g.add(chest);
-  const rump = add(new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), coatLight), 'body');
-  rump.position.set(-0.5, 1.02, 0);
-  g.add(rump);
-
-  const neck = new THREE.Group();
-  neck.name = 'neck';
-  neck.position.set(0.52, 1.14, 0);
-  g.add(neck);
-  const neckM = add(new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.14, 0.52, 8), coatMat), 'body');
-  neckM.position.set(0.10, 0.22, 0);
-  neckM.rotation.z = -0.5;
-  neck.add(neckM);
-  const headG = new THREE.Group();
-  headG.name = 'head';
-  headG.position.set(0.24, 0.44, 0);
-  neck.add(headG);
-  const skull = add(new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), coatMat), 'head');
-  skull.scale.set(1.15, 1, 0.9);
-  headG.add(skull);
-  const snout = add(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.09, 0.24, 8), coatMat), 'head');
-  snout.position.set(0.19, -0.03, 0);
-  snout.rotation.z = -1.35;
-  headG.add(snout);
-  const nose = add(new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), coatDark), 'head');
-  nose.position.set(0.30, -0.06, 0);
-  headG.add(nose);
-  for (const sgn of [-1, 1]) {
-    const ear = add(new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.17, 6), coatMat), 'head');
-    ear.position.set(-0.05, 0.13, sgn * 0.09);
-    ear.rotation.x = sgn * 0.7;
-    headG.add(ear);
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), coatDark);
-    eye.position.set(0.07, 0.03, sgn * 0.1);
-    headG.add(eye);
-    // antlers (hidden on does)
-    const beam = add(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.028, 0.42, 5), antlerMat), 'head');
-    beam.name = 'antler';
-    beam.position.set(-0.03, 0.3, sgn * 0.07);
-    beam.rotation.z = 0.35;
-    beam.rotation.x = sgn * 0.45;
-    headG.add(beam);
-    for (let t = 0; t < 3; t++) {
-      const tine = add(new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.018, 0.16 + t * 0.04, 5), antlerMat), 'head');
-      tine.name = 'antler';
-      tine.position.set(-0.10 + t * 0.07, 0.22 + t * 0.11, sgn * (0.10 + t * 0.05));
-      tine.rotation.z = -0.6;
-      tine.rotation.x = sgn * 0.5;
-      headG.add(tine);
-    }
+function varyColor(hex, lumVar) {
+  const hsv = C3(hex).toHSV();
+  return BABYLON.Color3.FromHSV(
+    (hsv.r + (R() - 0.5) * 12 + 360) % 360,
+    clamp(hsv.g + (R() - 0.5) * 0.12, 0, 1),
+    clamp(hsv.b + (R() - 0.5) * (lumVar || 0.16), 0.05, 1));
+}
+function plant(mesh, spots, opts) {
+  const o = opts || {};
+  const n = spots.length;
+  const buf = new Float32Array(n * 16);
+  const col = new Float32Array(n * 4);
+  const q = new BABYLON.Quaternion();
+  for (let i = 0; i < n; i++) {
+    const [x, z] = spots[i];
+    const s = lerp(o.sMin || 1, o.sMax || 1, R());
+    BABYLON.Quaternion.FromEulerAnglesToRef(o.tilt ? (R() - 0.5) * o.tilt : 0, R() * TAU, o.tilt ? (R() - 0.5) * o.tilt : 0, q);
+    const m = BABYLON.Matrix.Compose(V3(s, s * (0.85 + R() * 0.3), s), q, V3(x, terrainH(x, z) + (o.yOff || 0) * s, z));
+    m.copyToArray(buf, i * 16);
+    const c = varyColor(o.color, o.lumVar);
+    col[i * 4] = c.r; col[i * 4 + 1] = c.g; col[i * 4 + 2] = c.b; col[i * 4 + 3] = 1;
   }
-
-  const hips = [[0.34, 0.12], [0.34, -0.12], [-0.42, 0.13], [-0.42, -0.13]];
-  const legNames = ['legFL', 'legFR', 'legRL', 'legRR'];
-  hips.forEach(([hx, hz], i) => {
-    const leg = new THREE.Group();
-    leg.name = legNames[i];
-    leg.position.set(hx, 0.82, hz);
-    const upper = add(new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.04, 0.42, 6), coatMat), 'leg');
-    upper.position.y = -0.21;
-    leg.add(upper);
-    const lower = add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.028, 0.44, 6), coatDark), 'leg');
-    lower.position.y = -0.62;
-    leg.add(lower);
-    g.add(leg);
-  });
-
-  const tail = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.14, 3, 6), coatLight), 'body');
-  tail.name = 'tail';
-  tail.position.set(-0.78, 1.12, 0);
-  tail.rotation.z = 0.7;
-  g.add(tail);
-  return g;
+  const baseMat = new BABYLON.StandardMaterial('plantM', scene);
+  baseMat.diffuseColor = C3('#FFFFFF');
+  baseMat.specularColor = C3('#000000');
+  mesh.material = baseMat;
+  mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
+  mesh.thinInstanceSetBuffer('color', col, 4, true);
+  mesh.isPickable = false;
+  if (o.shadow) shadowGen.addShadowCaster(mesh);
+  return mesh;
 }
-const deerTemplate = buildDeerTemplate();
-const deerRoot = new THREE.Group();
-scene.add(deerRoot);
-const deerList = [];
+function mergeParts(parts) {
+  const m = BABYLON.Mesh.MergeMeshes(parts, true, true);
+  m.convertToFlatShadedMesh();
+  return m;
+}
+const cone = (d, h, y, t) => {
+  const c = BABYLON.MeshBuilder.CreateCylinder('c', { diameterTop: 0.01, diameterBottom: d, height: h, tessellation: t || 7 }, scene);
+  c.position.y = y;
+  c.bakeCurrentTransformIntoVertices();
+  return c;
+};
+const cyl = (dTop, dBot, h, y, t) => {
+  const c = BABYLON.MeshBuilder.CreateCylinder('c', { diameterTop: dTop, diameterBottom: dBot, height: h, tessellation: t || 7 }, scene);
+  c.position.y = y;
+  c.bakeCurrentTransformIntoVertices();
+  return c;
+};
+const blob = (r, x, y, z) => {
+  const b = BABYLON.MeshBuilder.CreateIcoSphere('b', { radius: r, subdivisions: 1, flat: true }, scene);
+  b.position.set(x, y, z);
+  b.bakeCurrentTransformIntoVertices();
+  return b;
+};
 
+// fat spruces
+const spruceSpots = scatter(2200, 55, 880, (x, z) => R() < forestDensity(x, z))
+  .concat(scatter(12, 26, 150, () => R() < 0.6));
+plant(mergeParts([cone(7.4, 5.2, 4.4), cone(5.8, 4.6, 7.0), cone(4.0, 4.0, 9.5), cone(2.4, 3.2, 11.8)]),
+  spruceSpots, { sMin: 0.5, sMax: 1.7, color: pal.spruce, shadow: true });
+plant(cyl(0.5, 0.7, 3.6, 1.7), spruceSpots, { sMin: 0.5, sMax: 1.7, color: '#6B4A2E', lumVar: 0.08 });
+
+// lollipop trees
+const lolliSpots = scatter(620, 60, 800, (x, z) => R() < forestDensity(x, z) * 0.8)
+  .concat(scatter(10, 26, 150, () => R() < 0.5));
+plant(mergeParts([blob(2.9, 0, 6.4, 0), blob(1.9, 1.9, 5.2, 0.6), blob(1.7, -1.8, 5.5, -0.5)]),
+  lolliSpots, { sMin: 0.6, sMax: 1.6, color: pal.lolli, shadow: true });
+plant(cyl(0.55, 0.75, 4.6, 2.2), lolliSpots, { sMin: 0.6, sMax: 1.6, color: '#8A5A34', lumVar: 0.08 });
+
+// birches
+const birchSpots = scatter(420, 60, 720, (x, z) => R() < forestDensity(x, z) * 0.7);
+plant(mergeParts([blob(2.0, 0, 7.2, 0), blob(1.4, -1.2, 6.0, 0.4), blob(1.3, 1.2, 6.3, -0.4)]),
+  birchSpots, { sMin: 0.6, sMax: 1.4, color: pal.birch, shadow: true });
+plant(cyl(0.28, 0.4, 7.4, 3.5), birchSpots, { sMin: 0.6, sMax: 1.4, color: '#F2F0E8', lumVar: 0.05 });
+
+// bushes
+plant(mergeParts([blob(1.1, 0, 0.6, 0), blob(0.8, 0.9, 0.45, 0.3), blob(0.7, -0.8, 0.5, -0.3)]),
+  scatter(480, 40, 720, (x, z) => R() < 0.25 + forestDensity(x, z) * 0.6),
+  { sMin: 0.5, sMax: 1.5, color: pal.snow ? '#9FB8A8' : '#3E9A38', shadow: true });
+
+// boulders
+plant((() => { const b = blob(1.5, 0, 0.9, 0); b.convertToFlatShadedMesh(); return b; })(),
+  scatter(230, 25, 820, () => true),
+  { sMin: 0.35, sMax: 2.3, tilt: 0.6, color: pal.snow ? '#C8D2E0' : '#9BA8C0', lumVar: 0.14, shadow: true });
+
+// stumps
+plant(cyl(0.9, 1.05, 0.8, 0.4, 8),
+  scatter(90, 40, 600, (x, z) => R() < 0.15 + forestDensity(x, z) * 0.4),
+  { sMin: 0.6, sMax: 1.3, color: '#8A6238', lumVar: 0.08, shadow: true });
+
+// chunky grass: clusters of squashed pyramids
+const grassBlade2 = (() => { const c = cone(0.42, 0.85, 0.42, 4); c.position.set(0.3, 0, 0.14); c.bakeCurrentTransformIntoVertices(); return c; })();
+const grassBlade3 = (() => { const c = cone(0.4, 0.7, 0.35, 4); c.position.set(-0.28, 0, -0.12); c.bakeCurrentTransformIntoVertices(); return c; })();
+plant(mergeParts([cone(0.5, 1.0, 0.5, 4), grassBlade2, grassBlade3]),
+  scatter(5200, 4, 320, (x, z) => forestDensity(x, z) < 0.3),
+  { sMin: 0.5, sMax: 1.6, color: pal.snow ? '#E8EEF6' : pal.g2, lumVar: 0.18 });
+
+// flowers in spring/summer — white / pink / yellow / purple
+if (seasonIdx === 1 || seasonIdx === 2) {
+  const flowerHead = mergeParts([blob(0.16, 0, 0.55, 0), cyl(0.04, 0.05, 0.5, 0.25, 5)]);
+  const flowerSpots = scatter(520, 6, 240, (x, z) => forestDensity(x, z) < 0.2);
+  const n = flowerSpots.length;
+  const buf = new Float32Array(n * 16);
+  const col = new Float32Array(n * 4);
+  const q = BABYLON.Quaternion.Identity();
+  const opts = ['#FFF6F8', '#FF8ACD', '#FFD84A', '#B78AFF'];
+  for (let i = 0; i < n; i++) {
+    const [x, z] = flowerSpots[i];
+    const s = 0.7 + R() * 0.7;
+    BABYLON.Matrix.Compose(V3(s, s, s), q, V3(x, terrainH(x, z), z)).copyToArray(buf, i * 16);
+    const c = C3(opts[Math.floor(R() * opts.length)]);
+    col[i * 4] = c.r; col[i * 4 + 1] = c.g; col[i * 4 + 2] = c.b; col[i * 4 + 3] = 1;
+  }
+  const fMat = new BABYLON.StandardMaterial('flowerM', scene);
+  fMat.diffuseColor = C3('#FFFFFF');
+  fMat.specularColor = C3('#000000');
+  flowerHead.material = fMat;
+  flowerHead.thinInstanceSetBuffer('matrix', buf, 16, true);
+  flowerHead.thinInstanceSetBuffer('color', col, 4, true);
+  flowerHead.isPickable = false;
+}
+
+// mushrooms in autumn
+if (seasonIdx === 3) {
+  const shroomSpots = scatter(130, 45, 500, (x, z) => forestDensity(x, z) > 0.15);
+  plant(cyl(0.14, 0.18, 0.4, 0.2, 6), shroomSpots, { sMin: 0.7, sMax: 1.4, color: '#F2E8D8', lumVar: 0.05 });
+  plant((() => {
+    const c = BABYLON.MeshBuilder.CreateSphere('cap', { diameter: 0.55, segments: 4, slice: 0.5 }, scene);
+    c.position.y = 0.38;
+    c.bakeCurrentTransformIntoVertices();
+    return c;
+  })(), shroomSpots, { sMin: 0.7, sMax: 1.4, color: '#E84A34', lumVar: 0.06 });
+}
+
+// ── Deer materials ──────────────────────────────────────────────────────
+const MAT = {
+  doe: flatMat('#C98A54'), doeDark: flatMat('#8A5A34'), belly: flatMat('#F2E0C8'),
+  buck: flatMat('#9C6B3E'), buckDark: flatMat('#6A452A'),
+  gold: (() => { const m = flatMat('#FFD84A'); m.emissiveColor = C3('#8A6508'); return m; })(),
+  goldDark: (() => { const m = flatMat('#E8B830'); m.emissiveColor = C3('#6A4E06'); return m; })(),
+  dark: flatMat('#2A2226'), antler: flatMat('#E8D5A8'), nose: flatMat('#3A2E30')
+};
+
+// ── Deer (chunky, cute; harvest = confetti, no gore) ────────────────────
+const deerList = [];
+let spawnT = 2;
 function activity() {
   const h = sun.hours;
   const gs = (x, s) => Math.exp(-x * x / (2 * s * s));
   return 0.25 + 0.9 * Math.max(gs(h - sun.sunrise - 0.6, 1.6), gs(h - sun.sunset + 0.6, 1.6));
 }
-
+function buildDeer(rarity) {
+  // rarity: 0 doe, 1 buck, 2 golden
+  const body = rarity === 2 ? MAT.gold : rarity === 1 ? MAT.buck : MAT.doe;
+  const dark = rarity === 2 ? MAT.goldDark : rarity === 1 ? MAT.buckDark : MAT.doeDark;
+  const root = new BABYLON.TransformNode('deer', scene);
+  const mk = (mesh, mat, zone) => {
+    mesh.material = mat;
+    mesh.parent = root;
+    mesh.metadata = { zone };
+    shadowGen.addShadowCaster(mesh);
+    return mesh;
+  };
+  const torso = mk(BABYLON.MeshBuilder.CreateBox('torso', { width: 0.52, height: 0.6, depth: 1.05 }, scene), body, 'body');
+  torso.position.y = 0.92;
+  const belly = mk(BABYLON.MeshBuilder.CreateBox('belly', { width: 0.54, height: 0.22, depth: 0.7 }, scene), MAT.belly, 'body');
+  belly.position.set(0, 0.72, -0.05);
+  const rump = mk(BABYLON.MeshBuilder.CreateBox('rump', { width: 0.5, height: 0.5, depth: 0.3 }, scene), MAT.belly, 'body');
+  rump.position.set(0, 0.98, -0.62);
+  const headPivot = new BABYLON.TransformNode('headPivot', scene);
+  headPivot.parent = root;
+  headPivot.position.set(0, 1.18, 0.5);
+  const head = mk(BABYLON.MeshBuilder.CreateBox('head', { width: 0.34, height: 0.36, depth: 0.4 }, scene), body, 'head');
+  head.parent = headPivot;
+  head.position.set(0, 0.28, 0.12);
+  const snout = mk(BABYLON.MeshBuilder.CreateBox('snout', { width: 0.2, height: 0.18, depth: 0.22 }, scene), dark, 'head');
+  snout.parent = headPivot;
+  snout.position.set(0, 0.22, 0.38);
+  const nose = mk(BABYLON.MeshBuilder.CreateBox('nose', { width: 0.1, height: 0.08, depth: 0.06 }, scene), MAT.nose, 'head');
+  nose.parent = headPivot;
+  nose.position.set(0, 0.24, 0.5);
+  for (const sgn of [-1, 1]) {
+    const eye = mk(BABYLON.MeshBuilder.CreateSphere('eye', { diameter: 0.09, segments: 4 }, scene), MAT.dark, 'head');
+    eye.parent = headPivot;
+    eye.position.set(sgn * 0.15, 0.32, 0.3);
+    const ear = mk(BABYLON.MeshBuilder.CreateCylinder('ear', { diameterTop: 0.02, diameterBottom: 0.14, height: 0.28, tessellation: 5 }, scene), dark, 'head');
+    ear.parent = headPivot;
+    ear.position.set(sgn * 0.16, 0.52, 0.02);
+    ear.rotation.z = -sgn * 0.4;
+    if (rarity >= 1) {
+      const beam = mk(BABYLON.MeshBuilder.CreateBox('antler', { width: 0.05, height: 0.42, depth: 0.05 }, scene), MAT.antler, 'head');
+      beam.parent = headPivot;
+      beam.position.set(sgn * 0.12, 0.68, 0);
+      beam.rotation.z = -sgn * 0.25;
+      const tine = mk(BABYLON.MeshBuilder.CreateBox('tine', { width: 0.26, height: 0.05, depth: 0.05 }, scene), MAT.antler, 'head');
+      tine.parent = headPivot;
+      tine.position.set(sgn * 0.2, 0.74, 0);
+    }
+  }
+  const legs = [];
+  const hipPos = [[0.17, 0.32], [-0.17, 0.32], [0.17, -0.4], [-0.17, -0.4]];
+  for (let i = 0; i < 4; i++) {
+    const hip = new BABYLON.TransformNode('hip', scene);
+    hip.parent = root;
+    hip.position.set(hipPos[i][0], 0.68, hipPos[i][1]);
+    const leg = mk(BABYLON.MeshBuilder.CreateCylinder('leg', { diameterTop: 0.14, diameterBottom: 0.1, height: 0.72, tessellation: 6 }, scene), dark, 'leg');
+    leg.parent = hip;
+    leg.position.y = -0.34;
+    legs.push(hip);
+  }
+  const tail = mk(BABYLON.MeshBuilder.CreateBox('tail', { width: 0.14, height: 0.2, depth: 0.1 }, scene), MAT.belly, 'body');
+  tail.parent = root;
+  tail.position.set(0, 1.14, -0.82);
+  return { root, headPivot, legs, tail };
+}
 function spawnDeer(anywhere) {
   let a, r, x, z, tries = 0;
   do {
@@ -878,68 +703,64 @@ function spawnDeer(anywhere) {
     r = anywhere ? 60 + Math.random() * 260 : 240 + Math.random() * 160;
     x = Math.cos(a) * r; z = Math.sin(a) * r;
   } while (!pondClear(x, z, 8) && ++tries < 12);
-  const grp = deerTemplate.clone(true);
-  const buck = Math.random() < 0.35;
-  const size = (0.9 + Math.random() * 0.22) * (buck ? 1.12 : 1);
-  grp.scale.setScalar(size);
-  const set = coatVariants[Math.floor(Math.random() * coatVariants.length)];
-  grp.traverse(o => {
-    if (o.name === 'antler') o.visible = buck;
-    if (o.isMesh) {
-      if (o.material === coatMat) o.material = set.coat;
-      else if (o.material === coatDark) o.material = set.dark;
-      else if (o.material === coatLight) o.material = set.light;
-    }
-  });
+  const roll = Math.random();
+  const rarity = roll < 0.05 ? 2 : roll < 0.4 ? 1 : 0;
+  const parts = buildDeer(rarity);
+  const size = (0.95 + Math.random() * 0.25) * (rarity === 1 ? 1.15 : 1);
+  parts.root.scaling.setAll(size);
   const d = {
-    grp, buck, size,
+    root: parts.root, headPivot: parts.headPivot, legs: parts.legs, tail: parts.tail,
+    rarity, size,
     x, z, heading: Math.random() * TAU,
     state: anywhere ? 'graze' : 'walk', t: 3 + Math.random() * 6,
-    phase: Math.random() * TAU, g: 0, al: 0, fall: 0, deadT: 0,
-    wounded: false, woundT: 0, dist: 999
+    phase: Math.random() * TAU, g: 0, dist: 999,
+    wounded: false, woundT: 0, sparkle: null
   };
-  grp.userData.deer = d;
-  grp.traverse(o => { o.userData.deer = d; });
-  deerRoot.add(grp);
+  parts.root.getChildMeshes().forEach(m => { if (m.metadata) m.metadata.deer = d; });
+  if (rarity === 2) {
+    d.sparkle = sparkleSystem(parts.root);
+    if (state === 'play') msg('✨ A legendary golden deer has appeared!');
+  }
   deerList.push(d);
 }
-
 function fleeDeer(d, fromX, fromZ) {
-  if (d.state === 'falling' || d.state === 'dead') return;
+  if (d.state === 'gone') return;
   d.state = 'flee';
-  // run directly away from the threat, with a little scatter
-  d.heading = Math.atan2(-(d.z - fromZ), d.x - fromX) + (Math.random() - 0.5) * 0.6;
+  d.heading = Math.atan2(d.x - fromX, d.z - fromZ) + (Math.random() - 0.5) * 0.6;
   d.t = 25;
 }
-
-function removeDeer(d) {
-  deerRoot.remove(d.grp);
+function despawnDeer(d) {
+  if (d.sparkle) { d.sparkle.stop(); d.sparkle.dispose(); }
+  d.root.getChildMeshes().forEach(m => shadowGen.removeShadowCaster(m));
+  d.root.dispose(false, false); // materials are shared between deer — keep them
   const i = deerList.indexOf(d);
   if (i !== -1) deerList.splice(i, 1);
 }
-
+const killFx = [];
+function harvestDeer(d) {
+  d.state = 'gone';
+  if (d.sparkle) { d.sparkle.stop(); }
+  confetti(V3(d.x, terrainH(d.x, d.z) + 1, d.z), d.rarity === 2);
+  killFx.push({ d, t: 0 });
+}
 function updateDeer(dt) {
   const target = clamp(Math.round(1 + 5 * activity()), 1, 6);
-  let liveCount = 0;
-  for (const d of deerList) if (d.state !== 'dead' && d.state !== 'falling') liveCount++;
+  let live = 0;
+  for (const d of deerList) if (d.state !== 'gone') live++;
   spawnT -= dt;
-  if (liveCount < target && spawnT <= 0) { spawnDeer(false); spawnT = 6 + Math.random() * 14; }
+  if (live < target && spawnT <= 0) { spawnDeer(false); spawnT = 5 + Math.random() * 12; }
 
   for (let i = deerList.length - 1; i >= 0; i--) {
     const d = deerList[i];
+    if (d.state === 'gone') continue;
     d.t -= dt;
     d.dist = Math.hypot(d.x - player.x, d.z - player.z);
-    const gT = d.state === 'graze' ? 1 : 0;
-    d.g += (gT - d.g) * Math.min(1, dt * 3);
-    const aT = (d.state === 'alert' || d.state === 'flee') ? 1 : 0;
-    d.al += (aT - d.al) * Math.min(1, dt * 4);
+    d.g += ((d.state === 'graze' ? 1 : 0) - d.g) * Math.min(1, dt * 4);
 
-    // spook if the hunter walks too close
-    if (d.state !== 'flee' && d.state !== 'falling' && d.state !== 'dead') {
-      if (d.dist < 25) fleeDeer(d, player.x, player.z);
-      else if (d.dist < 55 && playerMoving && Math.random() < dt * 0.8) { d.state = 'alert'; d.t = 4 + Math.random() * 4; }
+    if (d.state !== 'flee') {
+      if (d.dist < 22) fleeDeer(d, player.x, player.z);
+      else if (d.dist < 50 && playerMoving && Math.random() < dt * 0.8) { d.state = 'alert'; d.t = 3 + Math.random() * 4; }
     }
-
     switch (d.state) {
       case 'graze': case 'stand':
         if (d.t <= 0) {
@@ -950,12 +771,12 @@ function updateDeer(dt) {
         }
         break;
       case 'walk': {
-        d.x += Math.cos(d.heading) * 0.9 * dt;
-        d.z -= Math.sin(d.heading) * 0.9 * dt;
+        d.x += Math.sin(d.heading) * 1.1 * dt;
+        d.z += Math.cos(d.heading) * 1.1 * dt;
         const r = Math.hypot(d.x, d.z);
-        if (r > 480) d.heading = Math.atan2(d.z, -d.x); // turn back toward the glade
-        else if (r > 300 && Math.random() < dt * 0.25) d.heading = Math.atan2(d.z, -d.x) + (Math.random() - 0.5);
-        if (!pondClear(d.x, d.z, 6)) d.heading = Math.atan2(-(d.z - POND.z), d.x - POND.x);
+        if (r > 480) d.heading = Math.atan2(-d.x, -d.z);
+        else if (r > 300 && Math.random() < dt * 0.25) d.heading = Math.atan2(-d.x, -d.z) + (Math.random() - 0.5);
+        if (!pondClear(d.x, d.z, 6)) d.heading = Math.atan2(d.x - POND.x, d.z - POND.z);
         if (d.t <= 0) { d.state = 'graze'; d.t = 4 + Math.random() * 8; }
         break;
       }
@@ -963,128 +784,190 @@ function updateDeer(dt) {
         if (d.t <= 0) { d.state = 'graze'; d.t = 3 + Math.random() * 5; }
         break;
       case 'flee': {
-        d.x += Math.cos(d.heading) * 8.5 * dt;
-        d.z -= Math.sin(d.heading) * 8.5 * dt;
+        const spd = d.rarity === 2 ? 12 : 9;
+        d.x += Math.sin(d.heading) * spd * dt;
+        d.z += Math.cos(d.heading) * spd * dt;
         if (d.wounded) {
           d.woundT -= dt;
-          if (d.woundT <= 0) { d.state = 'falling'; d.fall = 0; thud(); }
+          if (d.woundT <= 0) { harvestDeer(d); continue; }
         }
-        if (Math.hypot(d.x, d.z) > 900 || d.t <= 0) { removeDeer(d); continue; }
+        if (Math.hypot(d.x, d.z) > 900 || d.t <= 0) { despawnDeer(d); continue; }
         break;
       }
-      case 'falling':
-        d.fall += dt * 2.2;
-        if (d.fall >= 1) { d.fall = 1; d.state = 'dead'; d.t = 14; }
-        break;
-      case 'dead':
-        if (d.t < 2.5) d.grp.position.y -= dt * 0.5; // settle into the grass
-        if (d.t <= 0) { removeDeer(d); continue; }
-        break;
     }
-
-    d.phase += dt * (d.state === 'flee' ? 13 : d.state === 'walk' ? 5.5 : 0.7);
-
-    // pose
-    const amp = d.state === 'flee' ? 0.9 : d.state === 'walk' ? 0.45 : 0.03;
-    const offs = [0, Math.PI, Math.PI * 0.55, Math.PI * 1.5];
-    ['legFL', 'legFR', 'legRL', 'legRR'].forEach((n, li) => {
-      const leg = d.grp.getObjectByName(n);
-      if (leg) leg.rotation.z = Math.sin(d.phase + offs[li]) * amp;
-    });
-    const neck = d.grp.getObjectByName('neck');
-    if (neck) neck.rotation.z = lerp(0.25 * d.al, -1.55, d.g);
-    const tail = d.grp.getObjectByName('tail');
-    if (tail) tail.rotation.z = d.state === 'flee' ? 2.1 : 0.7;
-
-    if (d.state !== 'dead') d.grp.position.set(d.x, terrainH(d.x, d.z), d.z);
-    d.grp.rotation.y = d.heading;
-    d.grp.rotation.x = -d.fall * d.fall * Math.PI / 2 * 0.92;
+    d.phase += dt * (d.state === 'flee' ? 13 : d.state === 'walk' ? 6 : 0.8);
+    const amp = d.state === 'flee' ? 0.9 : d.state === 'walk' ? 0.5 : 0.03;
+    const offs = [0, Math.PI, Math.PI, 0];
+    d.legs.forEach((hip, li) => { hip.rotation.x = Math.sin(d.phase + offs[li]) * amp; });
+    d.headPivot.rotation.x = lerp(d.state === 'alert' ? -0.25 : 0, 1.1, d.g);
+    d.tail.rotation.x = d.state === 'flee' ? -0.9 : -0.2;
+    const hop = d.state === 'flee' ? Math.abs(Math.sin(d.phase * 0.5)) * 0.35 : 0;
+    d.root.position.set(d.x, terrainH(d.x, d.z) + hop, d.z);
+    d.root.rotation.y = d.heading;
+  }
+  // harvest animation: spin up, shrink, vanish in confetti
+  for (let i = killFx.length - 1; i >= 0; i--) {
+    const k = killFx[i];
+    k.t += dt;
+    const p = k.t / 0.6;
+    if (p >= 1) { despawnDeer(k.d); killFx.splice(i, 1); continue; }
+    k.d.root.rotation.y += dt * 14;
+    k.d.root.position.y += dt * 3.5 * (1 - p);
+    k.d.root.scaling.setAll(k.d.size * Math.max(0.05, 1 - p * p));
   }
 }
 
-// ── Precipitation ───────────────────────────────────────────────────────
-const RAIN_N = 1600, SNOW_N = 2200, PRECIP_BOX = 46;
-const rainGeo = new THREE.BufferGeometry();
-const rainPos = new Float32Array(RAIN_N * 2 * 3);
-rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-const rainDrops = [];
-for (let i = 0; i < RAIN_N; i++) rainDrops.push({ x: (Math.random() - 0.5) * PRECIP_BOX * 2, y: Math.random() * 40, z: (Math.random() - 0.5) * PRECIP_BOX * 2, v: 18 + Math.random() * 8 });
-const rainLines = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({ color: 0xaebfd8, transparent: true, opacity: 0.4 }));
-rainLines.frustumCulled = false;
-scene.add(rainLines);
-
-const snowGeo = new THREE.BufferGeometry();
-const snowPos = new Float32Array(SNOW_N * 3);
-snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
-const snowFlakes = [];
-for (let i = 0; i < SNOW_N; i++) snowFlakes.push({ x: (Math.random() - 0.5) * PRECIP_BOX * 2, y: Math.random() * 35, z: (Math.random() - 0.5) * PRECIP_BOX * 2, v: 1 + Math.random() * 1.4, ph: Math.random() * TAU });
-const snowPoints = new THREE.Points(snowGeo, new THREE.PointsMaterial({
-  map: discTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)'),
-  color: 0xf0f4fa, size: 0.14, transparent: true, opacity: 0.9, depthWrite: false
-}));
-snowPoints.frustumCulled = false;
-scene.add(snowPoints);
-
-function updatePrecip(dt, elapsed) {
-  const isSnow = tempNow() < 1;
-  const nRain = isSnow ? 0 : Math.floor(wx.precip * RAIN_N);
-  const nSnow = isSnow ? Math.floor(wx.precip * SNOW_N) : 0;
-  rainLines.visible = nRain > 0;
-  snowPoints.visible = nSnow > 0;
-  const px = player.x, pz = player.z, py = player.y;
-  if (nRain > 0) {
-    const wxv = wx.wind * 0.35;
-    for (let i = 0; i < nRain; i++) {
-      const dr = rainDrops[i];
-      dr.y -= dr.v * dt;
-      dr.x += wxv * dt;
-      if (dr.y < -4) { dr.y += 40; dr.x = (Math.random() - 0.5) * PRECIP_BOX * 2; dr.z = (Math.random() - 0.5) * PRECIP_BOX * 2; }
-      const j = i * 6;
-      rainPos[j] = px + dr.x; rainPos[j + 1] = py + dr.y; rainPos[j + 2] = pz + dr.z;
-      rainPos[j + 3] = px + dr.x + wxv * 0.04; rainPos[j + 4] = py + dr.y - 0.7; rainPos[j + 5] = pz + dr.z;
-    }
-    rainGeo.setDrawRange(0, nRain * 2);
-    rainGeo.attributes.position.needsUpdate = true;
+// ── Supply crate balloon ────────────────────────────────────────────────
+let crate = null, crateTimer = 30 + Math.random() * 40;
+function spawnCrate() {
+  const root = new BABYLON.TransformNode('crate', scene);
+  const box = BABYLON.MeshBuilder.CreateBox('crateBox', { size: 2.4 }, scene);
+  box.material = flatMat('#C98A3E');
+  box.parent = root;
+  const strap = BABYLON.MeshBuilder.CreateBox('strap', { width: 2.5, height: 2.5, depth: 0.5 }, scene);
+  strap.material = flatMat('#8A5A26');
+  strap.parent = root;
+  const balloon = BABYLON.MeshBuilder.CreateSphere('balloon', { diameter: 4.6, segments: 6 }, scene);
+  balloon.material = flatMat('#FF5A8E', 0.25);
+  balloon.parent = root;
+  balloon.position.y = 5;
+  const rope = BABYLON.MeshBuilder.CreateCylinder('rope', { diameter: 0.08, height: 2.8 }, scene);
+  rope.material = flatMat('#E8E0D0');
+  rope.parent = root;
+  rope.position.y = 2.6;
+  rope.isPickable = false;
+  const side = Math.random() < 0.5 ? -1 : 1;
+  crate = { root, x: -side * 460, z: (Math.random() - 0.5) * 260, vx: side * (7 + Math.random() * 4), y: 38 + Math.random() * 18, ph: Math.random() * TAU };
+  [box, strap, balloon].forEach(m => { m.metadata = { zone: 'crate' }; shadowGen.addShadowCaster(m); });
+  msg('📦 Supply balloon incoming!');
+}
+function popCrate() {
+  confetti(crate.root.position.clone(), true);
+  crate.root.getChildMeshes().forEach(m => shadowGen.removeShadowCaster(m));
+  crate.root.dispose(false, true);
+  crate = null;
+  crateTimer = 50 + Math.random() * 60;
+}
+function updateCrate(dt, elapsedT) {
+  if (!crate) {
+    crateTimer -= dt;
+    if (crateTimer <= 0 && state === 'play') spawnCrate();
+    return;
   }
-  if (nSnow > 0) {
-    for (let i = 0; i < nSnow; i++) {
-      const f = snowFlakes[i];
-      f.y -= f.v * dt;
-      f.x += (wx.wind * 0.12 + Math.sin(elapsed * 1.3 + f.ph) * 0.4) * dt;
-      f.z += Math.cos(elapsed * 1.1 + f.ph) * 0.3 * dt;
-      if (f.y < -4) { f.y += 35; f.x = (Math.random() - 0.5) * PRECIP_BOX * 2; f.z = (Math.random() - 0.5) * PRECIP_BOX * 2; }
-      const j = i * 3;
-      snowPos[j] = px + f.x; snowPos[j + 1] = py + f.y; snowPos[j + 2] = pz + f.z;
-    }
-    snowGeo.setDrawRange(0, nSnow);
-    snowGeo.attributes.position.needsUpdate = true;
-  }
+  crate.x += crate.vx * dt;
+  crate.root.position.set(crate.x, crate.y + Math.sin(elapsedT * 0.8 + crate.ph) * 2, crate.z);
+  crate.root.rotation.y += dt * 0.3;
+  if (Math.abs(crate.x) > 520) popCrate();
 }
 
-// ── Impact FX (sprite puffs) ────────────────────────────────────────────
-const fxList = [];
-const dustTex = discTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)');
-function puffAt(p, color, size) {
-  const m = new THREE.SpriteMaterial({ map: dustTex, color, transparent: true, opacity: 0.85, depthWrite: false });
-  const s = new THREE.Sprite(m);
-  s.position.copy(p);
-  s.scale.setScalar(size * 0.4);
-  scene.add(s);
-  fxList.push({ s, t: 0, max: 0.5, size });
+// ── Particles ───────────────────────────────────────────────────────────
+function circleTexture(hex) {
+  const dt = new BABYLON.DynamicTexture('pt', { width: 64, height: 64 }, scene, false);
+  const g = dt.getContext();
+  g.clearRect(0, 0, 64, 64);
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, hex);
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  dt.update();
+  dt.hasAlpha = true;
+  return dt;
 }
-function updateFx(dt) {
-  for (let i = fxList.length - 1; i >= 0; i--) {
-    const f = fxList[i];
-    f.t += dt;
-    const k = f.t / f.max;
-    f.s.scale.setScalar(f.size * (0.4 + k * 1.4));
-    f.s.material.opacity = 0.85 * (1 - k);
-    f.s.position.y += dt * 0.6;
-    if (k >= 1) { scene.remove(f.s); f.s.material.dispose(); fxList.splice(i, 1); }
-  }
+const softTex = circleTexture('rgba(255,255,255,1)');
+
+const camAnchor = V3(0, 0, 0);
+const rain = new BABYLON.ParticleSystem('rain', 3000, scene);
+rain.particleTexture = softTex;
+rain.emitter = camAnchor;
+rain.minEmitBox = V3(-35, 16, -35);
+rain.maxEmitBox = V3(35, 24, 35);
+rain.direction1 = V3(0, -1, 0);
+rain.direction2 = V3(0, -1, 0);
+rain.minEmitPower = 26; rain.maxEmitPower = 34;
+rain.minLifeTime = 0.9; rain.maxLifeTime = 1.2;
+rain.minSize = 0.06; rain.maxSize = 0.12;
+rain.billboardMode = BABYLON.ParticleSystem.BILLBOARDMODE_STRETCHED;
+rain.color1 = new BABYLON.Color4(0.65, 0.75, 0.95, 0.5);
+rain.color2 = new BABYLON.Color4(0.75, 0.85, 1, 0.6);
+rain.emitRate = 0;
+rain.start();
+
+const snow = new BABYLON.ParticleSystem('snow', 2500, scene);
+snow.particleTexture = softTex;
+snow.emitter = camAnchor;
+snow.minEmitBox = V3(-40, 14, -40);
+snow.maxEmitBox = V3(40, 22, 40);
+snow.direction1 = V3(-0.3, -1, -0.3);
+snow.direction2 = V3(0.3, -1, 0.3);
+snow.minEmitPower = 1.2; snow.maxEmitPower = 2.4;
+snow.minLifeTime = 7; snow.maxLifeTime = 11;
+snow.minSize = 0.12; snow.maxSize = 0.26;
+snow.color1 = new BABYLON.Color4(1, 1, 1, 0.85);
+snow.color2 = new BABYLON.Color4(0.9, 0.94, 1, 0.9);
+snow.emitRate = 0;
+snow.start();
+
+function burst(pos, big, c1, c2, count) {
+  const ps = new BABYLON.ParticleSystem('burst', count + 10, scene);
+  ps.particleTexture = softTex;
+  ps.emitter = pos;
+  ps.minEmitBox = V3(-0.3, 0, -0.3);
+  ps.maxEmitBox = V3(0.3, 0.5, 0.3);
+  ps.direction1 = V3(-1, 1.5, -1);
+  ps.direction2 = V3(1, 3, 1);
+  ps.minEmitPower = 5; ps.maxEmitPower = big ? 14 : 9;
+  ps.minLifeTime = 0.7; ps.maxLifeTime = 1.4;
+  ps.minSize = 0.18; ps.maxSize = 0.4;
+  ps.gravity = V3(0, -14, 0);
+  ps.color1 = c1;
+  ps.color2 = c2;
+  ps.manualEmitCount = count;
+  ps.disposeOnStop = true;
+  ps.targetStopDuration = 1.8;
+  ps.start();
+}
+function confetti(pos, big) {
+  burst(pos, big, new BABYLON.Color4(1, 0.85, 0.3, 1), new BABYLON.Color4(1, 0.4, 0.75, 1), big ? 160 : 80);
+  burst(pos, big, new BABYLON.Color4(0.35, 0.85, 1, 1), new BABYLON.Color4(0.5, 1, 0.5, 1), big ? 110 : 55);
+}
+function dustPuff(pos, hex) {
+  const c = C3(hex);
+  const ps = new BABYLON.ParticleSystem('dust', 40, scene);
+  ps.particleTexture = softTex;
+  ps.emitter = pos;
+  ps.direction1 = V3(-1, 0.5, -1);
+  ps.direction2 = V3(1, 1.5, 1);
+  ps.minEmitPower = 1.5; ps.maxEmitPower = 4;
+  ps.minLifeTime = 0.3; ps.maxLifeTime = 0.7;
+  ps.minSize = 0.25; ps.maxSize = 0.6;
+  ps.color1 = new BABYLON.Color4(c.r, c.g, c.b, 0.8);
+  ps.color2 = new BABYLON.Color4(c.r, c.g, c.b, 0.4);
+  ps.manualEmitCount = 22;
+  ps.disposeOnStop = true;
+  ps.targetStopDuration = 0.9;
+  ps.start();
+}
+function sparkleSystem(node) {
+  const ps = new BABYLON.ParticleSystem('sparkle', 80, scene);
+  ps.particleTexture = softTex;
+  ps.emitter = node;
+  ps.minEmitBox = V3(-0.5, 0.4, -0.6);
+  ps.maxEmitBox = V3(0.5, 1.4, 0.6);
+  ps.direction1 = V3(0, 0.5, 0);
+  ps.direction2 = V3(0, 1.2, 0);
+  ps.minEmitPower = 0.3; ps.maxEmitPower = 0.8;
+  ps.minLifeTime = 0.5; ps.maxLifeTime = 1.0;
+  ps.minSize = 0.12; ps.maxSize = 0.28;
+  ps.color1 = new BABYLON.Color4(1, 0.9, 0.4, 1);
+  ps.color2 = new BABYLON.Color4(1, 0.75, 0.2, 0.8);
+  ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+  ps.emitRate = 26;
+  ps.start();
+  return ps;
 }
 
-// ── Audio (procedural) ──────────────────────────────────────────────────
+// ── Audio (procedural, with arcade dings) ───────────────────────────────
 let AC = null, master = null, windG = null, noiseBuf = null, muted = false;
 function initAudio() {
   if (AC) return;
@@ -1121,24 +1004,39 @@ function playNoise(dur, freq, gain) {
   src.start(t, Math.random());
   src.stop(t + dur + 0.05);
 }
+function tone(freq, dur, delay, type, gain) {
+  if (!AC || muted) return;
+  const o = AC.createOscillator();
+  o.type = type || 'square';
+  const t = AC.currentTime + (delay || 0);
+  o.frequency.setValueAtTime(freq, t);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain || 0.12, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(master);
+  o.start(t);
+  o.stop(t + dur + 0.02);
+}
 function shotSound() {
-  playNoise(0.5, 1600, 0.9);
+  playNoise(0.45, 1600, 0.9);
   if (!AC || muted) return;
   const o = AC.createOscillator();
   o.type = 'triangle';
   o.frequency.setValueAtTime(90, AC.currentTime);
-  o.frequency.exponentialRampToValueAtTime(35, AC.currentTime + 0.28);
+  o.frequency.exponentialRampToValueAtTime(35, AC.currentTime + 0.25);
   const g = AC.createGain();
-  g.gain.setValueAtTime(0.55, AC.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.3);
+  g.gain.setValueAtTime(0.5, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.28);
   o.connect(g); g.connect(master);
   o.start();
-  o.stop(AC.currentTime + 0.32);
+  o.stop(AC.currentTime + 0.3);
 }
 const boltSound = () => { playNoise(0.05, 3200, 0.18); setTimeout(() => playNoise(0.05, 2600, 0.18), 110); };
 const clickSound = () => playNoise(0.03, 2800, 0.12);
-const thud = () => playNoise(0.16, 220, 0.3);
 const thunderSound = () => playNoise(3.2, 140, 0.6);
+const ding = n => tone(620 * Math.pow(1.13, n), 0.16, 0, 'square', 0.1);
+const fanfare = () => { tone(523, 0.14, 0); tone(659, 0.14, 0.12); tone(784, 0.2, 0.24); tone(1047, 0.3, 0.38, 'square', 0.14); };
+const popSound = () => { playNoise(0.08, 2200, 0.4); tone(880, 0.12, 0.02, 'sine', 0.15); };
 
 // ── Player / input ──────────────────────────────────────────────────────
 const player = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -1149,30 +1047,58 @@ let rifleIdx = 1, ammo = RIFLES[1].mag;
 let reloadT = 0, fireCd = 0, recoil = 0, flashT = 0;
 let swYaw = 0, swPitch = 0, swayT = Math.random() * 100;
 let score = 0, kills = 0, best = 0;
+let streak = 0, lastKillAt = -99;
 try { best = parseInt(localStorage.getItem('deerhunt-best') || '0', 10) || 0; } catch (e) {}
-let spawnT = 2;
 const keys = {};
 let playerMoving = false;
-let hitMarkT = 0;
-let bobT = 0;
-let flash = 0, thunderIn = -1;
-let tracer = null;
-let pointerLocked = false;
-let virtualLook = false;
+let hitMarkT = 0, bobT = 0, flash = 0, thunderIn = -1;
+let pointerLocked = false, virtualLook = false;
 let vmx = 0, vmy = 0;
+let tracerMesh = null, tracerT = 0;
+let elapsed = 0;
 
 const menuEl = document.getElementById('menu');
 const hudEl = document.getElementById('hud');
-const glEl = renderer.domElement;
+const el = id => document.getElementById(id);
 
 function msg(text) {
   const div = document.createElement('div');
   div.className = 'msg';
   div.textContent = text;
-  const box = document.getElementById('msgs');
+  const box = el('msgs');
   box.appendChild(div);
   while (box.children.length > 4) box.removeChild(box.firstChild);
   setTimeout(() => { if (div.parentNode) div.parentNode.removeChild(div); }, 4600);
+}
+function banner(text) {
+  const b = el('banner');
+  b.textContent = text;
+  b.classList.remove('show');
+  void b.offsetWidth; // restart the CSS animation
+  b.classList.add('show');
+}
+function dmgPopup(worldPos, text, gold) {
+  const p = BABYLON.Vector3.Project(worldPos, BABYLON.Matrix.IdentityReadOnly,
+    scene.getTransformMatrix(), camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight()));
+  if (p.z < 0 || p.z > 1) return;
+  const div = document.createElement('div');
+  div.className = 'dmg' + (gold ? ' gold' : '');
+  div.textContent = text;
+  div.style.left = (p.x / DPR) + 'px';
+  div.style.top = (p.y / DPR) + 'px';
+  hudEl.appendChild(div);
+  setTimeout(() => { if (div.parentNode) div.parentNode.removeChild(div); }, 1200);
+}
+function bumpScore(pts) {
+  score += pts;
+  const s = el('score');
+  s.classList.remove('pop');
+  void s.offsetWidth;
+  s.classList.add('pop');
+  if (score > best) {
+    best = score;
+    try { localStorage.setItem('deerhunt-best', String(best)); } catch (e) {}
+  }
 }
 
 function startHunt() {
@@ -1192,10 +1118,10 @@ function backToMenu() {
   scoped = false;
   menuEl.classList.remove('hidden');
   hudEl.style.display = 'none';
-  document.getElementById('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
+  el('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
   if (document.pointerLockElement) document.exitPointerLock();
 }
-document.getElementById('start').addEventListener('click', startHunt);
+el('start').addEventListener('click', startHunt);
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === glEl;
   if (!pointerLocked && state === 'play' && !virtualLook) backToMenu();
@@ -1206,11 +1132,9 @@ glEl.addEventListener('mousemove', e => {
   if (state !== 'play') return;
   if (pointerLocked) {
     const k = 0.0022 / (scoped ? RIFLES[rifleIdx].zoom * 0.55 : 1);
-    player.yaw -= e.movementX * k;
-    player.pitch = clamp(player.pitch - e.movementY * k, -1.2, 1.2);
-  } else {
-    vmx = e.clientX; vmy = e.clientY;
-  }
+    player.yaw += e.movementX * k;
+    player.pitch = clamp(player.pitch + e.movementY * k, -1.2, 1.2);
+  } else { vmx = e.clientX; vmy = e.clientY; }
 });
 glEl.addEventListener('mousedown', e => {
   if (state === 'menu') return;
@@ -1223,7 +1147,6 @@ glEl.addEventListener('mousedown', e => {
 glEl.addEventListener('mouseup', e => { if (e.button === 2) scoped = false; });
 glEl.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('blur', () => { scoped = false; holdingBreath = false; for (const k in keys) keys[k] = false; });
-
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space') { holdingBreath = true; e.preventDefault(); }
@@ -1255,17 +1178,21 @@ window.addEventListener('keyup', e => {
 });
 
 // ── Ballistics ──────────────────────────────────────────────────────────
-const raycaster = new THREE.Raycaster();
-function terrainRayDist(origin, dir, maxD) {
+function dirFrom(yaw, pitch) {
+  const cp = Math.cos(pitch);
+  return V3(Math.sin(yaw) * cp, -Math.sin(pitch), Math.cos(yaw) * cp);
+}
+function terrainRayDist(ox, oy, oz, d, maxD) {
   let t = 2;
   while (t < maxD) {
-    const x = origin.x + dir.x * t, y = origin.y + dir.y * t, z = origin.z + dir.z * t;
+    const x = ox + d.x * t, y = oy + d.y * t, z = oz + d.z * t;
     const dh = y - terrainH(x, z);
     if (dh <= 0) return t;
     t += clamp(dh * 0.8, 0.4, 10);
   }
   return maxD;
 }
+const pickPredicate = m => !!(m.metadata && m.metadata.zone && m.isEnabled());
 function fire() {
   if (state !== 'play' || reloadT > 0 || fireCd > 0) return;
   if (ammo <= 0) { clickSound(); msg('Out of ammo — press R to reload'); return; }
@@ -1276,83 +1203,119 @@ function fire() {
   flashT = 0.06;
   hitMarkT = 0;
   shotSound();
-  flashLight.position.set(player.x, player.y - 0.2, player.z);
-  flashLight.intensity = 30;
 
-  // aim direction: camera direction incl. sway; hip fire adds spread
   let yaw = player.yaw + swYaw, pitch = player.pitch + swPitch;
   if (!scoped) {
     yaw += (Math.random() - 0.5) * 0.03 * rifle.sway;
     pitch += (Math.random() - 0.5) * 0.03 * rifle.sway;
   }
-  const dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
-  const origin = new THREE.Vector3(player.x, player.y, player.z);
+  const dir = dirFrom(yaw, pitch);
+  const origin = V3(player.x, player.y, player.z);
 
-  // first pass to estimate range, then apply drop + wind drift
-  raycaster.set(origin, dir);
-  raycaster.far = 1200;
-  let hits = raycaster.intersectObjects(deerRoot.children, true);
-  let D = hits.length ? hits[0].distance : terrainRayDist(origin, dir, 1200);
+  // estimate range, then compensate for drop + wind like a real bullet
+  let pick = scene.pickWithRay(new BABYLON.Ray(origin, dir, 1200), pickPredicate);
+  const D = (pick && pick.hit) ? pick.distance : terrainRayDist(player.x, player.y, player.z, dir, 1200);
   const tof = D / rifle.vel;
   const zt = 100 / rifle.vel;
   const dropM = Math.max(0, 4.9 * (tof * tof - zt * zt));
   const windM = wx.wind * tof * 0.5;
-  const dir2 = dir.clone();
+  const right = V3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+  const dir2 = dir.add(right.scale(windM / Math.max(D, 1)));
   dir2.y -= dropM / Math.max(D, 1);
-  const right = new THREE.Vector3(-dir.z, 0, dir.x).normalize();
-  dir2.addScaledVector(right, windM / Math.max(D, 1));
   dir2.normalize();
 
-  raycaster.set(origin, dir2);
-  hits = raycaster.intersectObjects(deerRoot.children, true);
-  const tD = terrainRayDist(origin, dir2, 1200);
-  let impact, hitDeer = null, zone = '';
-  if (hits.length && hits[0].distance < tD) {
-    const h0 = hits[0];
-    hitDeer = h0.object.userData.deer || null;
-    zone = h0.object.userData.zone || 'body';
-    impact = h0.point;
-    if (hitDeer && (hitDeer.state === 'falling' || hitDeer.state === 'dead')) { hitDeer = null; }
+  pick = scene.pickWithRay(new BABYLON.Ray(origin, dir2, 1200), pickPredicate);
+  const tD = terrainRayDist(player.x, player.y, player.z, dir2, 1200);
+  let impact, hitDeer = null, hitCrate = false, zone = '';
+  if (pick && pick.hit && pick.distance < tD) {
+    impact = pick.pickedPoint;
+    zone = pick.pickedMesh.metadata.zone;
+    if (zone === 'crate') hitCrate = true;
+    else {
+      hitDeer = pick.pickedMesh.metadata.deer || null;
+      if (hitDeer && hitDeer.state === 'gone') hitDeer = null;
+    }
   } else {
-    impact = origin.clone().addScaledVector(dir2, tD);
+    impact = origin.add(dir2.scale(tD));
   }
-  tracer = { from: origin.clone().addScaledVector(right, 0.25).add(new THREE.Vector3(0, -0.22, 0)), to: impact.clone(), t: 0.09 };
 
-  if (hitDeer) {
-    const dist = Math.round(origin.distanceTo(impact));
-    puffAt(impact, 0x8a1c14, 0.6);
+  // glowing tracer streak
+  if (tracerMesh) tracerMesh.dispose(false, true);
+  tracerMesh = BABYLON.MeshBuilder.CreateTube('tracer', {
+    path: [origin.add(right.scale(0.25)).add(V3(0, -0.2, 0)), impact], radius: 0.05, tessellation: 3
+  }, scene);
+  const tmat = new BABYLON.StandardMaterial('tracerM', scene);
+  tmat.emissiveColor = C3('#FFE9A0');
+  tmat.disableLighting = true;
+  tmat.alpha = 0.7;
+  tracerMesh.material = tmat;
+  tracerMesh.isPickable = false;
+  tracerT = 0.08;
+
+  const nowT = elapsed;
+  if (hitCrate) {
+    popSound();
+    fanfare();
+    bumpScore(200);
+    ammo = rifle.mag;
+    dmgPopup(impact, '+200', true);
+    banner('SUPPLY CRATE!');
+    msg('Ammo refilled!');
     hitMarkT = 0.25;
-    let pts;
-    if (zone === 'vital' || zone === 'head') {
-      hitDeer.state = 'falling';
-      hitDeer.fall = 0;
-      thud();
-      pts = Math.round(dist * 1.5) + (hitDeer.buck ? 150 : 0);
-      msg((zone === 'head' ? 'Head shot! ' : 'Clean kill! ') + (hitDeer.buck ? 'Buck' : 'Doe') + ' at ' + dist + ' m — +' + pts);
-    } else {
+    popCrate();
+  } else if (hitDeer) {
+    const dist = Math.round(BABYLON.Vector3.Distance(origin, impact));
+    // vital zone = the front third of the body
+    let zMult = 1;
+    if (zone === 'head') zMult = 2;
+    else if (zone === 'body') {
+      const localZ = (impact.x - hitDeer.x) * Math.sin(hitDeer.heading) + (impact.z - hitDeer.z) * Math.cos(hitDeer.heading);
+      if (localZ > 0.12) { zone = 'vital'; zMult = 1.5; }
+    }
+    const rarityMult = hitDeer.rarity === 2 ? 5 : hitDeer.rarity === 1 ? 2 : 1;
+    hitMarkT = 0.25;
+    if (zone === 'leg') {
       hitDeer.wounded = true;
-      hitDeer.woundT = 1.2 + Math.random() * 2;
+      hitDeer.woundT = 1 + Math.random() * 1.5;
       fleeDeer(hitDeer, player.x, player.z);
-      pts = dist + (hitDeer.buck ? 100 : 0);
-      msg('Hit! ' + (hitDeer.buck ? 'Buck' : 'Doe') + ' at ' + dist + ' m — +' + pts);
+      const pts = Math.max(5, Math.round(dist * rarityMult / 5) * 5);
+      bumpScore(pts);
+      kills++;
+      dmgPopup(impact, '+' + pts, hitDeer.rarity === 2);
+      msg("Winged it! It won't get far…");
+    } else {
+      if (nowT - lastKillAt < 12) streak++; else streak = 1;
+      lastKillAt = nowT;
+      const streakBonus = streak >= 4 ? 500 : streak === 3 ? 300 : streak === 2 ? 100 : 0;
+      const pts = Math.max(5, Math.round((dist * zMult * rarityMult + streakBonus) / 5) * 5);
+      bumpScore(pts);
+      kills++;
+      ding(Math.min(streak, 6));
+      dmgPopup(impact, '+' + pts, hitDeer.rarity === 2);
+      if (hitDeer.rarity === 2) { fanfare(); banner('LEGENDARY HARVEST!'); }
+      else if (streak >= 4) banner('RAMPAGE! +' + streakBonus);
+      else if (streak === 3) banner('TRIPLE! +' + streakBonus);
+      else if (streak === 2) banner('DOUBLE! +' + streakBonus);
+      else if (zone === 'head' && dist > 180) banner('PERFECT SHOT!');
+      const what = hitDeer.rarity === 2 ? 'Golden deer' : hitDeer.rarity === 1 ? 'Buck' : 'Doe';
+      msg(what + ' at ' + dist + ' m — +' + pts);
+      harvestDeer(hitDeer);
     }
-    score += pts;
-    kills++;
-    if (score > best) {
-      best = score;
-      try { localStorage.setItem('deerhunt-best', String(best)); } catch (e) {}
-    }
-  } else if (!pondClear(impact.x, impact.z, 0) && dir2.y < -0.01) {
-    const tw = (waterY - origin.y) / dir2.y;
-    if (tw > 0) impact = origin.clone().addScaledVector(dir2, tw);
-    puffAt(impact, 0xdceefc, 0.8);
   } else {
-    puffAt(impact, pal.snow ? 0xe8ecf4 : 0x9a8a68, 0.9);
+    // miss: splash or dirt puff
+    if (!pondClear(impact.x, impact.z, 0) && dir2.y < -0.01) {
+      const tw = (waterY - player.y) / dir2.y;
+      if (tw > 0) impact = origin.add(dir2.scale(tw));
+      dustPuff(impact, '#BFF0FF');
+    } else {
+      dustPuff(impact, pal.snow ? '#F0F4FA' : '#C9A96A');
+    }
+    streak = 0;
   }
 
   // every deer hears the shot
   for (const d of deerList) {
-    if (d === hitDeer || d.state === 'falling' || d.state === 'dead' || d.state === 'flee') continue;
+    if (d === hitDeer || d.state === 'gone' || d.state === 'flee') continue;
     const m = Math.hypot(d.x - impact.x, d.z - impact.z);
     if (m < 12) fleeDeer(d, impact.x, impact.z);
     else if (d.state === 'alert' && m < 60) fleeDeer(d, impact.x, impact.z);
@@ -1360,74 +1323,84 @@ function fire() {
   }
 }
 
-// ── Tracer line ─────────────────────────────────────────────────────────
-const tracerGeo = new THREE.BufferGeometry();
-tracerGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-const tracerLine = new THREE.Line(tracerGeo, new THREE.LineBasicMaterial({ color: 0xffe9b0, transparent: true, opacity: 0.5 }));
-tracerLine.visible = false;
-tracerLine.frustumCulled = false;
-scene.add(tracerLine);
-
-// ── Sky / lighting update ───────────────────────────────────────────────
-let light = 1, golden = 0, nightAmt = 0;
-const sunDir = new THREE.Vector3();
+// ── Sky / lighting update (arcade color grading) ────────────────────────
+const SKY = [
+  { a: -1.00, t: '#0E1D4E', h: '#27407E' },
+  { a: -0.12, t: '#101F52', h: '#2A4488' },
+  { a: -0.04, t: '#2A2E6E', h: '#B75C9A' },
+  { a:  0.00, t: '#4E63C8', h: '#FF9A5A' },
+  { a:  0.12, t: '#4FA8E8', h: '#FFD08A' },
+  { a:  0.35, t: '#3EB8F0', h: '#BDEBFF' },
+  { a:  1.00, t: '#35AEEF', h: '#C4EDFF' }
+];
+const sunDir = V3(0, 1, 0);
+let light = 1, nightAmt = 0;
+function mixC3(a, b, t) {
+  return new BABYLON.Color3(lerp(a.r, b.r, t), lerp(a.g, b.g, t), lerp(a.b, b.b, t));
+}
+function skyAt(alt) {
+  for (let i = 1; i < SKY.length; i++) {
+    if (alt <= SKY[i].a) {
+      const t = (alt - SKY[i - 1].a) / (SKY[i].a - SKY[i - 1].a);
+      return { top: mixC3(C3(SKY[i - 1].t), C3(SKY[i].t), t), hor: mixC3(C3(SKY[i - 1].h), C3(SKY[i].h), t) };
+    }
+  }
+  return { top: C3(SKY[SKY.length - 1].t), hor: C3(SKY[SKY.length - 1].h) };
+}
 function updateSky() {
-  const elev = sun.alt * 72;                       // degrees
-  const az = lerp(70, 290, sun.alt >= 0 ? sun.dayT : (sun.nightT < 0.5 ? 1 : 0));
-  const phi = THREE.MathUtils.degToRad(90 - elev);
-  const theta = THREE.MathUtils.degToRad(az);
-  sunDir.setFromSphericalCoords(1, phi, theta);
-  skyU.sunPosition.value.copy(sunDir);
-  skyU.turbidity.value = 6 + wx.cloud * 10 + wx.fog * 6;
-  skyU.rayleigh.value = 1.2 + golden * 2.4;
-  skyU.mieCoefficient.value = 0.004 + wx.cloud * 0.012;
-
-  light = clamp((sun.alt + 0.05) * 3.2, 0.05, 1) * (1 - 0.4 * wx.cloud) * (1 - 0.2 * wx.fog);
-  golden = clamp(1 - Math.abs(sun.alt - 0.06) / 0.14, 0, 1) * (1 - wx.cloud * 0.7);
+  const s = skyAt(sun.alt);
+  light = clamp((sun.alt + 0.08) * 3, 0.3, 1) * (1 - 0.25 * wx.cloud);
   nightAmt = clamp((0.02 - sun.alt) * 8, 0, 1);
+  const grayT = (s.hor.r + s.hor.g + s.hor.b) / 3;
+  const hor = mixC3(s.hor, new BABYLON.Color3(grayT, grayT, grayT), wx.cloud * 0.6);
+  const top = s.top.scale(0.6 + 0.4 * (1 - wx.cloud));
+  skyMat.setColor3('topColor', top);
+  skyMat.setColor3('horColor', hor);
+  scene.fogColor = hor;
+  scene.fogDensity = 0.0005 + wx.fog * 0.010 + wx.precip * 0.002 + nightAmt * 0.0006;
 
-  sunLight.intensity = clamp(sun.alt * 3, 0, 1) * 2.4 * (1 - wx.cloud * 0.85) * (1 - wx.fog * 0.5);
-  sunLight.color.setHSL(0.09 + 0.04 * (1 - golden), 0.5 * golden + 0.15, 0.9 - golden * 0.25);
-  sunLight.position.set(player.x + sunDir.x * 500, sunDir.y * 500, player.z + sunDir.z * 500);
-  sunLight.target.position.set(player.x, 0, player.z);
-
-  // moon roughly opposite the sun's daily track
+  // sun path east → west from the real clock; moon takes the night shift
+  const elev = Math.max(sun.alt, 0.02) * 1.25;
+  const az = lerp(-2.2, 2.2, sun.dayT);
+  sunDir.set(Math.sin(az) * Math.cos(elev), Math.sin(elev), Math.cos(az) * Math.cos(elev) * 0.4 + 0.25);
+  sunDir.normalize();
   const mT = sun.nightT;
-  const mElev = Math.sin(Math.PI * mT) * 50;
-  const mAz = lerp(70, 290, mT);
-  const mPhi = THREE.MathUtils.degToRad(90 - mElev);
-  const mTheta = THREE.MathUtils.degToRad(mAz);
-  const mDir = new THREE.Vector3().setFromSphericalCoords(1, mPhi, mTheta);
-  const moonUp = nightAmt * clamp(mElev / 15, 0, 1) * (1 - wx.cloud * 0.9);
-  moonLight.intensity = moonUp * 0.35;
-  moonLight.position.set(player.x + mDir.x * 500, mDir.y * 500, player.z + mDir.z * 500);
-  moonLight.target.position.set(player.x, 0, player.z);
-  moonSprite.material.opacity = moonUp;
-  moonSprite.position.set(player.x + mDir.x * 3800, mDir.y * 3800, player.z + mDir.z * 3800);
+  const mElev = Math.max(Math.sin(Math.PI * mT) * 0.9, 0.05);
+  const mAz = lerp(-2.2, 2.2, mT);
+  const moonDir = V3(Math.sin(mAz) * Math.cos(mElev), Math.sin(mElev), Math.cos(mAz) * Math.cos(mElev) * 0.4 + 0.25);
+  moonDir.normalize();
 
-  starMat.opacity = nightAmt * (1 - wx.cloud) * (1 - wx.fog) * 0.9;
+  const isNight = sun.alt < 0;
+  const cel = isNight ? moonDir : sunDir;
+  celestial.direction.copyFrom(cel.scale(-1));
+  celestial.position.copyFrom(V3(player.x, 0, player.z).add(cel.scale(400)));
+  celestial.intensity = isNight
+    ? 0.5 * (1 - wx.cloud * 0.6)
+    : (0.7 + clamp(sun.alt * 2, 0, 1) * 0.9) * (1 - wx.cloud * 0.55);
+  celestial.diffuse = isNight ? C3('#9FB4E8') : mixC3(C3('#FFD9A0'), C3('#FFF4DC'), clamp(sun.alt * 3, 0, 1));
+  hemi.intensity = 0.5 + light * 0.45;
+  hemi.diffuse = new BABYLON.Color3(lerp(0.5, 0.95, light), lerp(0.55, 0.98, light), lerp(0.75, 1, light));
+  hemi.groundColor = C3(pal.g2).scale(0.45 + light * 0.3);
 
-  hemi.intensity = 0.04 + light * 0.38 + nightAmt * 0.03;
-  renderer.toneMappingExposure = 0.45 + light * 0.25;
+  sunDisc.position.copyFrom(camera.position.add(sunDir.scale(3600)));
+  sunDisc.visibility = sun.alt > -0.05 ? (1 - wx.cloud * 0.8) * (1 - wx.fog * 0.6) : 0;
+  moonDisc.position.copyFrom(camera.position.add(moonDir.scale(3400)));
+  moonDisc.visibility = isNight ? (1 - wx.cloud * 0.85) : 0;
+  starMesh.material.alpha = nightAmt * (1 - wx.cloud) * 0.95;
 
-  // fog matches the horizon
-  const fogCol = new THREE.Color().setHSL(0.58 - golden * 0.5, 0.25 + golden * 0.35, clamp(0.12 + light * 0.55, 0.03, 0.75));
-  scene.fog.color.copy(fogCol);
-  scene.fog.density = 0.0007 + wx.fog * 0.014 + wx.precip * 0.0035 + nightAmt * 0.0012;
-
-  const cN = wx.cloud * cloudSprites.length;
-  cloudSprites.forEach((s, i) => {
-    s.material.opacity = clamp(cN - i, 0, 1) * 0.5 * clamp(0.25 + light, 0, 1);
-    s.material.color.setScalar(clamp(0.35 + light * 0.75 - wx.precip * 0.3, 0.1, 1));
+  const cN = wx.cloud * clouds.length;
+  clouds.forEach((c, i) => {
+    c.visibility = clamp(cN - i, 0, 1) * 0.85;
+    const cl = clamp(0.4 + light * 0.6 - wx.precip * 0.25, 0.15, 1);
+    c.material.emissiveColor = new BABYLON.Color3(cl, cl * 1.02, Math.min(1, cl * 1.06));
   });
 }
 
 // ── HUD ─────────────────────────────────────────────────────────────────
-const el = id => document.getElementById(id);
 function weatherIconTxt(name) {
-  if (name.includes('snow') || name === 'Snow') return '❄';
+  if (name.indexOf('snow') !== -1 || name === 'Snow') return '❄';
   if (name === 'Thunderstorm') return '⛈';
-  if (name.includes('rain') || name === 'Rain') return '\u{1F327}';
+  if (name.indexOf('rain') !== -1 || name === 'Rain') return '🌧';
   if (name === 'Fog') return '≈';
   if (name === 'Overcast') return '☁';
   if (name === 'Partly cloudy') return '⛅';
@@ -1443,8 +1416,8 @@ function updateHUD(dt, now) {
   el('wline').textContent = SEASON_NAMES[seasonIdx] + ' · ' + wn + ' ' + weatherIconTxt(wn) + ' · ' + tempNow().toFixed(0) + '°C';
   const wdir = wx.wind < -0.5 ? '←' : wx.wind > 0.5 ? '→' : '·';
   el('wline2').textContent = 'wind ' + wdir + ' ' + Math.abs(wx.wind).toFixed(1) + ' m/s · sun ' + fmtH(sun.sunrise) + '–' + fmtH(sun.sunset);
-  el('score').textContent = 'SCORE ' + score;
-  el('stats').textContent = 'deer ' + kills + ' · best ' + best;
+  el('score').textContent = score;
+  el('stats').textContent = 'deer ' + kills + ' · best ' + best + (streak >= 2 ? ' · 🔥×' + streak : '');
   const rifle = RIFLES[rifleIdx];
   el('rname').textContent = '[' + (rifleIdx + 1) + '] ' + rifle.name + ' ×' + rifle.zoom;
   let ammoStr = '';
@@ -1462,73 +1435,71 @@ function drawOverlay() {
   const cx = W / 2, cy = H / 2;
   if (scoped) {
     const r = Math.min(W, H) * 0.44;
-    octx.fillStyle = 'rgba(3,5,7,0.985)';
+    octx.fillStyle = 'rgba(4,6,10,0.985)';
     octx.beginPath();
     octx.rect(0, 0, W, H);
     octx.arc(cx, cy, r, 0, TAU, true);
     octx.fill();
-    const lg = octx.createRadialGradient(cx, cy, r * 0.72, cx, cy, r);
-    lg.addColorStop(0, 'rgba(0,0,20,0)');
-    lg.addColorStop(1, 'rgba(0,0,20,0.55)');
-    octx.fillStyle = lg;
-    octx.beginPath(); octx.arc(cx, cy, r, 0, TAU); octx.fill();
     octx.strokeStyle = '#0a0c0e';
     octx.lineWidth = 6;
     octx.beginPath(); octx.arc(cx, cy, r, 0, TAU); octx.stroke();
-    octx.strokeStyle = 'rgba(10,12,10,0.9)';
-    octx.lineWidth = 1.4;
+    octx.strokeStyle = 'rgba(20,24,20,0.9)';
+    octx.lineWidth = 1.6;
     octx.beginPath();
     octx.moveTo(cx - r, cy); octx.lineTo(cx + r, cy);
     octx.moveTo(cx, cy - r); octx.lineTo(cx, cy + r);
     octx.stroke();
-    octx.fillStyle = 'rgba(10,12,10,0.9)';
+    octx.fillStyle = 'rgba(20,24,20,0.9)';
     for (let i = 1; i <= 4; i++) {
-      octx.beginPath(); octx.arc(cx, cy + i * r * 0.12, 2.2, 0, TAU); octx.fill();
-      octx.beginPath(); octx.arc(cx + i * r * 0.12, cy, 1.6, 0, TAU); octx.fill();
-      octx.beginPath(); octx.arc(cx - i * r * 0.12, cy, 1.6, 0, TAU); octx.fill();
+      octx.beginPath(); octx.arc(cx, cy + i * r * 0.12, 2.4, 0, TAU); octx.fill();
+      octx.beginPath(); octx.arc(cx + i * r * 0.12, cy, 1.8, 0, TAU); octx.fill();
+      octx.beginPath(); octx.arc(cx - i * r * 0.12, cy, 1.8, 0, TAU); octx.fill();
     }
-    // rangefinder: whatever deer is closest to the reticle
+    // rangefinder
     let bestD = null, bestAng = 0.06;
-    const fwd = new THREE.Vector3(-Math.sin(player.yaw + swYaw), Math.sin(player.pitch + swPitch), -Math.cos(player.yaw + swYaw));
+    const fwd = dirFrom(player.yaw + swYaw, player.pitch + swPitch);
     for (const d of deerList) {
-      if (d.state === 'dead') continue;
-      const to = new THREE.Vector3(d.x - player.x, terrainH(d.x, d.z) + 1 - player.y, d.z - player.z);
-      const dist = to.length();
-      to.normalize();
-      const ang = fwd.angleTo(to);
-      if (ang < bestAng) { bestAng = ang; bestD = { dist: Math.round(dist), buck: d.buck }; }
+      if (d.state === 'gone') continue;
+      const tx = d.x - player.x, ty = terrainH(d.x, d.z) + 1 - player.y, tz = d.z - player.z;
+      const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
+      const dot = (fwd.x * tx + fwd.y * ty + fwd.z * tz) / len;
+      const ang = Math.acos(clamp(dot, -1, 1));
+      if (ang < bestAng) { bestAng = ang; bestD = { dist: Math.round(len), rarity: d.rarity }; }
     }
     if (bestD) {
-      octx.fillStyle = 'rgba(240,235,210,0.9)';
-      octx.font = '13px monospace';
+      octx.fillStyle = bestD.rarity === 2 ? 'rgba(255,216,74,0.95)' : 'rgba(240,245,240,0.9)';
+      octx.font = 'bold 14px monospace';
       octx.textAlign = 'center';
-      octx.fillText(bestD.dist + ' m' + (bestD.buck ? '  •  buck' : ''), cx, cy + r * 0.6);
+      const tag = bestD.rarity === 2 ? '  ★ LEGENDARY' : bestD.rarity === 1 ? '  • buck' : '';
+      octx.fillText(bestD.dist + ' m' + tag, cx, cy + r * 0.6);
     }
     // breath meter
     octx.fillStyle = 'rgba(0,0,0,0.5)';
     octx.fillRect(cx - 50, cy + r * 0.75, 100, 6);
-    octx.fillStyle = breath > 0.25 ? 'rgba(120,200,140,0.85)' : 'rgba(220,120,90,0.85)';
+    octx.fillStyle = breath > 0.25 ? 'rgba(120,224,120,0.9)' : 'rgba(255,122,92,0.9)';
     octx.fillRect(cx - 50, cy + r * 0.75, 100 * breath, 6);
   } else {
-    octx.strokeStyle = 'rgba(235,235,225,0.75)';
-    octx.lineWidth = 1.4;
-    const g = 6, l = 12;
+    octx.strokeStyle = 'rgba(255,255,255,0.85)';
+    octx.lineWidth = 2;
+    const g = 7, l = 13;
     octx.beginPath();
     octx.moveTo(cx - g - l, cy); octx.lineTo(cx - g, cy);
     octx.moveTo(cx + g, cy); octx.lineTo(cx + g + l, cy);
     octx.moveTo(cx, cy - g - l); octx.lineTo(cx, cy - g);
     octx.moveTo(cx, cy + g); octx.lineTo(cx, cy + g + l);
     octx.stroke();
+    octx.fillStyle = 'rgba(255,255,255,0.9)';
+    octx.fillRect(cx - 1.5, cy - 1.5, 3, 3);
   }
   if (hitMarkT > 0) {
-    octx.strokeStyle = 'rgba(230,90,70,' + (hitMarkT / 0.25) + ')';
-    octx.lineWidth = 2;
-    const hm = 10;
+    octx.strokeStyle = 'rgba(255,216,74,' + (hitMarkT / 0.25) + ')';
+    octx.lineWidth = 3;
+    const hm = 12;
     octx.beginPath();
-    octx.moveTo(cx - hm, cy - hm); octx.lineTo(cx - 4, cy - 4);
-    octx.moveTo(cx + hm, cy - hm); octx.lineTo(cx + 4, cy - 4);
-    octx.moveTo(cx - hm, cy + hm); octx.lineTo(cx - 4, cy + 4);
-    octx.moveTo(cx + hm, cy + hm); octx.lineTo(cx + 4, cy + 4);
+    octx.moveTo(cx - hm, cy - hm); octx.lineTo(cx - 5, cy - 5);
+    octx.moveTo(cx + hm, cy - hm); octx.lineTo(cx + 5, cy - 5);
+    octx.moveTo(cx - hm, cy + hm); octx.lineTo(cx - 5, cy + 5);
+    octx.moveTo(cx + hm, cy + hm); octx.lineTo(cx + 5, cy + 5);
     octx.stroke();
   }
   if (flashT > 0) {
@@ -1545,16 +1516,14 @@ function drawOverlay() {
 pickWeather();
 wx.cloud = wx.tc; wx.fog = wx.tf; wx.precip = wx.tp; wx.wind = wx.tw;
 computeSun(now0);
-updateSky();
-refreshEnv();
 for (let i = 0; i < 3; i++) spawnDeer(true);
-document.getElementById('menu-season').textContent =
+el('menu-season').textContent =
   SEASON_NAMES[seasonIdx] + ' · sunrise ' + fmtH(sun.sunrise) + ' · sunset ' + fmtH(sun.sunset);
-document.getElementById('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
+el('menu-best').textContent = best > 0 ? 'Best score: ' + best : '';
 
-let lastT = performance.now(), elapsed = 0;
-function frame(t) {
-  requestAnimationFrame(frame);
+let lastT = performance.now();
+engine.runRenderLoop(() => {
+  const t = performance.now();
   const dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
   elapsed += dt;
@@ -1563,33 +1532,32 @@ function frame(t) {
   updateWeather(dt);
   swayT += dt;
 
-  // movement
   playerMoving = false;
   if (state === 'play') {
-    const spd = 3.2 * (scoped ? 0.4 : 1);
-    let fx2 = 0, fz2 = 0;
-    if (keys.KeyW) { fx2 += 1; }
-    if (keys.KeyS) { fx2 -= 1; }
-    if (keys.KeyA) { fz2 -= 1; }
-    if (keys.KeyD) { fz2 += 1; }
-    if (fx2 || fz2) {
+    const spd = 4.2 * (scoped ? 0.4 : 1);
+    let fx = 0, fz = 0;
+    if (keys.KeyW) fx += 1;
+    if (keys.KeyS) fx -= 1;
+    if (keys.KeyA) fz -= 1;
+    if (keys.KeyD) fz += 1;
+    if (fx || fz) {
       playerMoving = true;
-      const len = Math.hypot(fx2, fz2);
-      const fwdX = -Math.sin(player.yaw), fwdZ = -Math.cos(player.yaw);
-      const rgtX = -fwdZ, rgtZ = fwdX;
-      player.x += (fwdX * fx2 + rgtX * fz2) / len * spd * dt;
-      player.z += (fwdZ * fx2 + rgtZ * fz2) / len * spd * dt;
+      const len = Math.hypot(fx, fz);
+      const fwdX = Math.sin(player.yaw), fwdZ = Math.cos(player.yaw);
+      const rgtX = Math.cos(player.yaw), rgtZ = -Math.sin(player.yaw);
+      player.x += (fwdX * fx + rgtX * fz) / len * spd * dt;
+      player.z += (fwdZ * fx + rgtZ * fz) / len * spd * dt;
       const pr = Math.hypot(player.x, player.z);
       if (pr > 620) { player.x *= 620 / pr; player.z *= 620 / pr; }
-      bobT += dt * 7;
+      bobT += dt * 8;
     }
-    player.y = terrainH(player.x, player.z) + 1.7 + Math.sin(bobT) * 0.045 * (playerMoving ? 1 : 0);
+    player.y = terrainH(player.x, player.z) + 1.7 + Math.sin(bobT) * 0.05 * (playerMoving ? 1 : 0);
 
     const lookRate = scoped ? 0.3 : 1.3;
-    if (keys.ArrowLeft) player.yaw += lookRate * dt;
-    if (keys.ArrowRight) player.yaw -= lookRate * dt;
-    if (keys.ArrowUp) player.pitch = clamp(player.pitch + lookRate * 0.6 * dt, -1.2, 1.2);
-    if (keys.ArrowDown) player.pitch = clamp(player.pitch - lookRate * 0.6 * dt, -1.2, 1.2);
+    if (keys.ArrowLeft) player.yaw -= lookRate * dt;
+    if (keys.ArrowRight) player.yaw += lookRate * dt;
+    if (keys.ArrowUp) player.pitch = clamp(player.pitch - lookRate * 0.6 * dt, -1.2, 1.2);
+    if (keys.ArrowDown) player.pitch = clamp(player.pitch + lookRate * 0.6 * dt, -1.2, 1.2);
 
     if (virtualLook && !pointerLocked) {
       const ox = (vmx - W / 2) / (W / 2), oy = (vmy - H / 2) / (H / 2);
@@ -1597,47 +1565,52 @@ function frame(t) {
       const kx = Math.abs(ox) > dead ? (ox - Math.sign(ox) * dead) : 0;
       const ky = Math.abs(oy) > dead ? (oy - Math.sign(oy) * dead) : 0;
       const sens = scoped ? 0.3 : 1;
-      player.yaw -= kx * kx * kx * 4 * dt * sens;
-      player.pitch = clamp(player.pitch - ky * ky * ky * 3 * dt * sens, -1.2, 1.2);
+      player.yaw += kx * kx * kx * 4 * dt * sens;
+      player.pitch = clamp(player.pitch + ky * ky * ky * 3 * dt * sens, -1.2, 1.2);
     }
   }
 
-  // breath & sway
+  // sway & breath
   const rifle = RIFLES[rifleIdx];
   if (holdingBreath && scoped && breath > 0) breath = Math.max(0, breath - dt / 4);
   else breath = Math.min(1, breath + dt / 6);
   const bf = (holdingBreath && scoped && breath > 0) ? 0.22 : 1;
   const swAmp = rifle.sway * (scoped ? 0.0035 : 0.0016) * bf * (playerMoving ? 2.2 : 1);
   swYaw = (Math.sin(swayT * 1.1) + 0.6 * Math.sin(swayT * 2.3 + 1.7)) * swAmp;
-  swPitch = (Math.sin(swayT * 1.7 + 0.9) + 0.6 * Math.sin(swayT * 2.9)) * swAmp + recoil * 0.05;
+  swPitch = (Math.sin(swayT * 1.7 + 0.9) + 0.6 * Math.sin(swayT * 2.9)) * swAmp - recoil * 0.05;
 
   recoil = Math.max(0, recoil - dt * 2.2);
   fireCd = Math.max(0, fireCd - dt);
   flashT = Math.max(0, flashT - dt);
   hitMarkT = Math.max(0, hitMarkT - dt);
-  flashLight.intensity = Math.max(0, flashLight.intensity - dt * 600);
   if (reloadT > 0) {
     reloadT -= dt;
     if (reloadT <= 0) { reloadT = 0; ammo = rifle.mag; boltSound(); }
   }
+  if (elapsed - lastKillAt > 12) streak = 0;
 
   // camera
   const targetFov = scoped ? BASE_FOV / rifle.zoom : BASE_FOV;
   camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 10);
-  camera.updateProjectionMatrix();
   camera.position.set(player.x, player.y, player.z);
   camera.rotation.set(player.pitch + swPitch, player.yaw + swYaw, 0);
 
   updateSky();
-  if (state === 'play') updateDeer(dt);
-  updateFx(dt);
-  updatePrecip(dt, elapsed);
+  if (state === 'play') { updateDeer(dt); updateCrate(dt, elapsed); }
+
+  // precipitation follows the hunter
+  camAnchor.copyFrom(camera.position);
+  const isSnowing = tempNow() < 1;
+  rain.emitRate = isSnowing ? 0 : wx.precip * 2200;
+  rain.direction1.set(wx.wind * 0.06, -1, 0);
+  rain.direction2.set(wx.wind * 0.06, -1, 0);
+  snow.emitRate = isSnowing ? wx.precip * 500 : 0;
 
   // clouds drift with the wind
-  for (const s of cloudSprites) {
-    s.position.x += (wx.wind * 1.2 + s.userData.drift) * dt;
-    if (s.position.x - player.x > 2200) s.position.x -= 4400;
-    if (s.position.x - player.x < -2200) s.position.x += 4400;
+  for (const c of clouds) {
+    c.position.x += (wx.wind * 1.2 + c.metadata.drift) * dt;
+    if (c.position.x - player.x > 2100) c.position.x -= 4200;
+    if (c.position.x - player.x < -2100) c.position.x += 4200;
   }
 
   // thunder
@@ -1651,34 +1624,23 @@ function frame(t) {
     if (thunderIn <= 0) { thunderSound(); thunderIn = -1; }
   }
 
-  // tracer
-  if (tracer) {
-    tracer.t -= dt;
-    if (tracer.t <= 0) { tracer = null; tracerLine.visible = false; }
-    else {
-      tracerLine.visible = true;
-      const pp = tracerGeo.attributes.position;
-      pp.setXYZ(0, tracer.from.x, tracer.from.y, tracer.from.z);
-      pp.setXYZ(1, tracer.to.x, tracer.to.y, tracer.to.z);
-      pp.needsUpdate = true;
-      tracerLine.material.opacity = tracer.t / 0.09 * 0.5;
-    }
+  // tracer fade
+  if (tracerMesh) {
+    tracerT -= dt;
+    if (tracerT <= 0) { tracerMesh.dispose(false, true); tracerMesh = null; }
+    else tracerMesh.material.alpha = tracerT / 0.08 * 0.7;
   }
+
+  // gentle water shimmer
+  waterMat.emissiveColor = C3('#0E4E66').scale(0.7 + Math.sin(elapsed * 1.4) * 0.15 + light * 0.5);
 
   if (windG) windG.gain.value = muted ? 0 : 0.02 + Math.abs(wx.wind) / 8 * 0.12 + wx.precip * 0.1;
 
-  windUniforms.uTime.value = elapsed;
-  windUniforms.uWind.value = 0.35 + Math.abs(wx.wind) * 0.16;
-  water.material.uniforms.time.value += dt * 0.8;
-  water.material.uniforms.sunDirection.value.copy(sunDir);
-  envTimer -= dt;
-  if (envTimer <= 0) { refreshEnv(); envTimer = 10; }
-
-  composer.render();
+  scene.render();
   drawOverlay();
   updateHUD(dt, now);
-}
-requestAnimationFrame(frame);
+});
+})();
 </script>
 </body>
 </html>

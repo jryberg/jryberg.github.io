@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript with no build system. The only dependency is three.js, loaded from the jsdelivr CDN by `deerhunt.html`.
+Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript with no build system. The only dependency is Babylon.js, loaded from the jsdelivr CDN by `deerhunt.html` (version-pinned with an SRI integrity hash — update the hash when bumping the version).
 
 ## Development
 
@@ -27,4 +27,4 @@ Everything lives in `index.html` (~444 lines):
 
 When adding new commands, add them to the command handler switch/if-chain in the JavaScript. When adding new files or directories, update the virtual filesystem object.
 
-**X11 apps**: entries in `/usr/bin` with `xapp: true` open a separate HTML page (`src`) inside a draggable Motif-style window in an iframe. Optional `winW`/`winH` set the default window size. `clock` → `garden-clock.html`, `floppy` → `floppy.html`, `deerhunt` → `deerhunt.html` (a three.js 3D hunting game whose time of day, season and weather are simulated in real time).
+**X11 apps**: entries in `/usr/bin` with `xapp: true` open a separate HTML page (`src`) inside a draggable Motif-style window in an iframe. Optional `winW`/`winH` set the default window size. `clock` → `garden-clock.html`, `floppy` → `floppy.html`, `deerhunt` → `deerhunt.html` (a stylized arcade 3D hunting game built on Babylon.js; time of day, season and weather follow the real clock).
