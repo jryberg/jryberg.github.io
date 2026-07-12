@@ -44,6 +44,27 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 #start { margin-top: 20px; background: linear-gradient(180deg, rgba(255,216,74,0.25), rgba(255,160,40,0.15)); color: #ffe9a0; border: 2px solid #ffd84a; border-radius: 10px; font: inherit; font-size: 18px; font-weight: bold; padding: 12px 40px; cursor: pointer; }
 #start:hover { background: linear-gradient(180deg, rgba(255,216,74,0.45), rgba(255,160,40,0.3)); }
 #err { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; color: #ff8a6a; background: #0a0a0a; font-size: 14px; padding: 20px; text-align: center; }
+#keys-touch { display: none; }
+body.touch #keys-touch { display: table; }
+body.touch #keys-kbd { display: none; }
+#touch { display: none; position: absolute; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.touch #touch { display: block; }
+#touch > * { pointer-events: auto; touch-action: none; }
+#stick { position: absolute; left: 26px; bottom: 34px; width: 124px; height: 124px; border-radius: 50%;
+  background: rgba(10,14,18,0.35); border: 1px solid rgba(120,220,120,0.4); }
+#nub { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%;
+  background: rgba(120,220,120,0.25); border: 1px solid rgba(120,220,120,0.7); }
+.tb { position: absolute; border-radius: 50%; background: rgba(10,14,18,0.4); border: 1px solid rgba(120,220,120,0.5);
+  color: #a8cba8; font: inherit; font-size: 10px; font-weight: bold; padding: 0; }
+.tb:active, .tb.on { background: rgba(120,220,120,0.3); color: #eef6ee; }
+#tb-fire { right: 26px; bottom: 34px; width: 76px; height: 76px; font-size: 13px; border-color: #ffd84a; color: #ffe9a0; }
+#tb-fire:active { background: rgba(255,216,74,0.35); }
+#tb-scope { right: 116px; bottom: 46px; width: 54px; height: 54px; }
+#tb-breath { right: 36px; bottom: 124px; width: 54px; height: 54px; }
+#tb-reload { right: 122px; bottom: 118px; width: 54px; height: 54px; }
+#tb-rifle { right: 36px; bottom: 192px; width: 54px; height: 54px; }
+#tb-menu { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: auto; border-radius: 10px;
+  background: rgba(10,14,18,0.4); border: 1px solid rgba(120,220,120,0.4); color: #a8cba8; font: inherit; font-size: 11px; padding: 5px 14px; }
 </style>
 </head>
 <body>
@@ -66,11 +87,28 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
   </div>
   <div id="msgs"></div>
   <div id="banner"></div>
+  <div id="touch">
+    <div id="stick"><div id="nub"></div></div>
+    <button class="tb" id="tb-fire">FIRE</button>
+    <button class="tb" id="tb-scope">SCOPE</button>
+    <button class="tb" id="tb-breath">BREATH</button>
+    <button class="tb" id="tb-reload">RELOAD</button>
+    <button class="tb" id="tb-rifle">RIFLE</button>
+    <button id="tb-menu">&#10005; quit</button>
+  </div>
 </div>
 <div id="menu">
   <h1>DEER HUNT</h1>
   <div class="sub">securit.se arcade wilderness &middot; real time &middot; real weather</div>
-  <table>
+  <table id="keys-touch">
+    <tr><td>drag screen</td><td>look around</td></tr>
+    <tr><td>left stick</td><td>run</td></tr>
+    <tr><td>FIRE / tap</td><td>fire</td></tr>
+    <tr><td>SCOPE</td><td>scope on / off</td></tr>
+    <tr><td>hold BREATH</td><td>hold breath (steadies the scope)</td></tr>
+    <tr><td>RELOAD / RIFLE</td><td>reload / switch rifle</td></tr>
+  </table>
+  <table id="keys-kbd">
     <tr><td>mouse</td><td>look around</td></tr>
     <tr><td>W A S D</td><td>run</td></tr>
     <tr><td>left button / F</td><td>fire</td></tr>
@@ -1313,6 +1351,8 @@ let hitMarkT = 0, bobT = 0, flash = 0, thunderIn = -1;
 let pointerLocked = false, virtualLook = false;
 let swimming = false, maulT = 0;
 let vmx = 0, vmy = 0;
+let touchMode = false, lastTouchT = -1;
+const stickVec = { x: 0, y: 0 };   // strafe / forward, each in [-1, 1]
 let tracerMesh = null, tracerT = 0;
 let elapsed = 0;
 
@@ -1368,6 +1408,7 @@ function startHunt() {
   menuEl.classList.add('hidden');
   hudEl.style.display = '';
   virtualLook = false;
+  if (touchMode) return;   // touch look needs no pointer lock
   try {
     const p = glEl.requestPointerLock();
     if (p && p.catch) p.catch(() => { virtualLook = true; });
@@ -1388,8 +1429,10 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('pointerlockerror', () => { virtualLook = true; });
 
+// browsers synthesize mouse events after taps — ignore mouse input right after a touch
+const touchRecent = () => lastTouchT >= 0 && performance.now() - lastTouchT < 1500;
 glEl.addEventListener('mousemove', e => {
-  if (state !== 'play') return;
+  if (state !== 'play' || touchRecent()) return;
   if (pointerLocked) {
     const k = 0.0022 / (scoped ? RIFLES[rifleIdx].zoom * 0.55 : 1);
     player.yaw += e.movementX * k;
@@ -1397,7 +1440,7 @@ glEl.addEventListener('mousemove', e => {
   } else { vmx = e.clientX; vmy = e.clientY; }
 });
 glEl.addEventListener('mousedown', e => {
-  if (state === 'menu') return;
+  if (state === 'menu' || touchRecent()) return;
   if (e.button === 0) {
     if (!pointerLocked && !virtualLook) { startHunt(); return; }
     fire();
@@ -1411,20 +1454,11 @@ window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space') { holdingBreath = true; e.preventDefault(); }
   if (state !== 'play') return;
-  if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
-    const idx = +e.code.slice(-1) - 1;
-    if (idx !== rifleIdx) {
-      rifleIdx = idx;
-      ammo = RIFLES[idx].mag;
-      reloadT = 0;
-      boltSound();
-      msg(RIFLES[idx].name);
-    }
-  }
+  if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') selectRifle(+e.code.slice(-1) - 1);
   if (e.code === 'KeyQ') scoped = !scoped;
   if (e.code === 'KeyF' || e.code === 'Enter') fire();
   if (e.code.indexOf('Arrow') === 0) e.preventDefault();
-  if (e.code === 'KeyR' && reloadT <= 0 && ammo < RIFLES[rifleIdx].mag) reloadT = RIFLES[rifleIdx].reload;
+  if (e.code === 'KeyR') startReload();
   if (e.code === 'KeyM') {
     muted = !muted;
     if (master) master.gain.value = muted ? 0 : 0.8;
@@ -1436,6 +1470,106 @@ window.addEventListener('keyup', e => {
   keys[e.code] = false;
   if (e.code === 'Space') holdingBreath = false;
 });
+
+function selectRifle(idx) {
+  if (idx === rifleIdx) return;
+  rifleIdx = idx;
+  ammo = RIFLES[idx].mag;
+  reloadT = 0;
+  boltSound();
+  msg(RIFLES[idx].name);
+}
+function startReload() {
+  if (reloadT <= 0 && ammo < RIFLES[rifleIdx].mag) reloadT = RIFLES[rifleIdx].reload;
+}
+
+// ── Touch controls ──────────────────────────────────────────────────────
+function enableTouch() { touchMode = true; document.body.classList.add('touch'); }
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) enableTouch();
+window.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') { enableTouch(); lastTouchT = performance.now(); }
+}, true);
+
+// drag on the canvas to look; a quick tap fires, and so does a second finger
+let lookId = null, lookX = 0, lookY = 0, tapT = 0, tapDist = 0;
+glEl.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch' || state !== 'play') return;
+  e.preventDefault();
+  if (lookId === null) {
+    lookId = e.pointerId;
+    lookX = e.clientX; lookY = e.clientY;
+    tapT = performance.now(); tapDist = 0;
+    glEl.setPointerCapture(e.pointerId);
+  } else fire();
+});
+glEl.addEventListener('pointermove', e => {
+  if (e.pointerId !== lookId || state !== 'play') return;
+  lastTouchT = performance.now();
+  const dx = e.clientX - lookX, dy = e.clientY - lookY;
+  lookX = e.clientX; lookY = e.clientY;
+  tapDist += Math.abs(dx) + Math.abs(dy);
+  const k = 0.005 / (scoped ? RIFLES[rifleIdx].zoom * 0.55 : 1);
+  player.yaw += dx * k;
+  player.pitch = clamp(player.pitch + dy * k, -1.2, 1.2);
+});
+const endLook = e => {
+  if (e.pointerId !== lookId) return;
+  lookId = null;
+  if (e.type === 'pointerup' && state === 'play' && performance.now() - tapT < 220 && tapDist < 12) fire();
+};
+glEl.addEventListener('pointerup', endLook);
+glEl.addEventListener('pointercancel', endLook);
+
+const stickEl = el('stick'), nubEl = el('nub');
+let stickId = null;
+function setStick(e) {
+  const r = stickEl.getBoundingClientRect();
+  let dx = (e.clientX - r.left - r.width / 2) / (r.width / 2);
+  let dy = (e.clientY - r.top - r.height / 2) / (r.height / 2);
+  const len = Math.hypot(dx, dy);
+  if (len > 1) { dx /= len; dy /= len; }
+  nubEl.style.transform = 'translate(' + (dx * r.width * 0.32).toFixed(1) + 'px,' + (dy * r.height * 0.32).toFixed(1) + 'px)';
+  const dead = 0.22, mag = Math.hypot(dx, dy);
+  if (mag < dead) { stickVec.x = 0; stickVec.y = 0; return; }
+  const sc = (mag - dead) / (1 - dead) / mag;
+  stickVec.x = dx * sc;
+  stickVec.y = -dy * sc;
+}
+stickEl.addEventListener('pointerdown', e => {
+  lastTouchT = performance.now();
+  stickId = e.pointerId;
+  stickEl.setPointerCapture(e.pointerId);
+  e.preventDefault();
+  setStick(e);
+});
+stickEl.addEventListener('pointermove', e => {
+  if (e.pointerId !== stickId) return;
+  lastTouchT = performance.now();
+  setStick(e);
+});
+const endStick = e => {
+  if (e.pointerId !== stickId) return;
+  stickId = null;
+  stickVec.x = 0; stickVec.y = 0;
+  nubEl.style.transform = '';
+};
+stickEl.addEventListener('pointerup', endStick);
+stickEl.addEventListener('pointercancel', endStick);
+
+function tbtn(id, down, up) {
+  const b = el(id);
+  b.addEventListener('pointerdown', () => { lastTouchT = performance.now(); down(); });
+  if (up) {
+    b.addEventListener('pointerup', up);
+    b.addEventListener('pointercancel', up);
+  }
+}
+tbtn('tb-fire', fire);
+tbtn('tb-scope', () => { scoped = !scoped; });
+tbtn('tb-breath', () => { holdingBreath = true; }, () => { holdingBreath = false; });
+tbtn('tb-reload', startReload);
+tbtn('tb-rifle', () => selectRifle((rifleIdx + 1) % RIFLES.length));
+tbtn('tb-menu', backToMenu);
 
 // ── Ballistics ──────────────────────────────────────────────────────────
 function dirFrom(yaw, pitch) {
@@ -1456,7 +1590,7 @@ const pickPredicate = m => !!(m.metadata && m.metadata.zone && m.isEnabled());
 function fire() {
   if (state !== 'play' || reloadT > 0 || fireCd > 0) return;
   if (swimming) { clickSound(); msg("Can't shoot while swimming"); return; }
-  if (ammo <= 0) { clickSound(); msg('Out of ammo — press R to reload'); return; }
+  if (ammo <= 0) { clickSound(); msg(touchMode ? 'Out of ammo — tap RELOAD' : 'Out of ammo — press R to reload'); return; }
   const rifle = RIFLES[rifleIdx];
   ammo--;
   fireCd = rifle.cycle;
@@ -1716,7 +1850,8 @@ function updateHUD(dt, now) {
   const ammoEl = el('ammo');
   ammoEl.textContent = ammoStr;
   ammoEl.className = ammo === 0 ? 'empty' : '';
-  el('rhint').textContent = swimming ? 'swimming — keep the rifle dry!' : reloadT > 0 ? 'reloading…' : (ammo === 0 ? 'press R to reload' : '');
+  el('rhint').textContent = swimming ? 'swimming — keep the rifle dry!' : reloadT > 0 ? 'reloading…' : (ammo === 0 ? (touchMode ? 'tap RELOAD' : 'press R to reload') : '');
+  if (touchMode) el('tb-scope').classList.toggle('on', scoped);
 }
 
 // ── Overlay (reticle / scope) ───────────────────────────────────────────
@@ -1848,9 +1983,10 @@ engine.runRenderLoop(() => {
     if (keys.KeyS) fx -= 1;
     if (keys.KeyA) fz -= 1;
     if (keys.KeyD) fz += 1;
+    fx += stickVec.y; fz += stickVec.x;
     if (fx || fz) {
       playerMoving = true;
-      const len = Math.hypot(fx, fz);
+      const len = Math.max(1, Math.hypot(fx, fz));
       const fwdX = Math.sin(player.yaw), fwdZ = Math.cos(player.yaw);
       const rgtX = Math.cos(player.yaw), rgtZ = -Math.sin(player.yaw);
       player.x += (fwdX * fx + rgtX * fz) / len * spd * dt;
