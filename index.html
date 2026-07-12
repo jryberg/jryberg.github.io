@@ -1399,7 +1399,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
   function makeResume(stmts, i) {
     return function() {
       runItems(stmts, i);
-      updatePrompt();
+      if (!readline) updatePrompt();   // don't clobber a pending ssh prompt
       scrollToBottom();
     };
   }
@@ -4918,7 +4918,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       syncTyped();
       reportCompletedJobs();
       execute(val);
-      updatePrompt();
+      if (!readline) updatePrompt();   // don't clobber a pending ssh prompt
       scrollToBottom();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
