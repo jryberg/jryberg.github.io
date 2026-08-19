@@ -28,8 +28,9 @@ jobs:
         uses: actions/configure-pages@v4
       - name: Build site
         run: |
+          node build.js --verify
           mkdir _site
-          cp index.html 404.html garden-clock.html floppy.html deerhunt.html CNAME _site/
+          cp index.html 404.html garden-clock.html floppy.html floppyhunt.html deerhunt.html CNAME _site/
           cp -r assets _site/
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

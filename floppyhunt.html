@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Floppy Hunt</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+#wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; cursor: none; outline: none; touch-action: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" tabindex="0"></canvas></div>
+<script>
+(function() {
+'use strict';
+
+// ── Floppy Hunt ────────────────────────────────────────────────────────────
+// A Duck Hunt clone: floppy disks instead of ducks, mouse aim, 2 shots per
+// disk, PERFECT rounds, the laughing dog, and a moving-disk bonus round every
+// 5th round. Pure canvas, procedural art, WebAudio synth SFX — no assets.
+
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h) { this.rect(x, y, w, h); };
+}
+
+var W = 640, H = 480;              // logical resolution (4:3, NES aspect)
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+canvas.width = W; canvas.height = H;
+
+function resize() {
+  var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+var TAU = Math.PI * 2;
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ── Open-source sprite assets (CC0: Kenney Nature Kit, pzUH dog) ───────────
+// Loaded from assets/floppyhunt/; the game degrades gracefully if missing.
+var IMG = {};
+var ASSET_NAMES = [
+  'dog_idle', 'dog_jump1', 'dog_jump2', 'dog_jump3', 'dog_jump4',
+  'dog_run1', 'dog_run2',
+  'tree_oak', 'tree_detailed', 'tree_default', 'tree_pineRoundA', 'tree_cone',
+  'plant_bush', 'plant_bushLarge', 'plant_bushDetailed', 'plant_bushTriangle',
+  'flower_redA', 'flower_redB', 'flower_yellowA', 'flower_purpleA', 'grass_leafs'
+];
+var assetsPending = ASSET_NAMES.length;
+function loadAssets() {
+  ASSET_NAMES.forEach(function(name) {
+    var img = new Image();
+    img.onload = function() { IMG[name] = img; if (--assetsPending === 0) paintNature(); };
+    img.onerror = function() { IMG[name] = null; if (--assetsPending === 0) paintNature(); };
+    img.src = 'assets/floppyhunt/' + name + '.png';
+  });
+}
+
+function lighten(hex, amt) {
+  var n = parseInt(hex.slice(1), 16);
+  var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 'rgb(' + Math.min(255, r + amt) + ',' + Math.min(255, g + amt) + ',' + Math.min(255, b + amt) + ')';
+}
+
+// ── Audio (WebAudio synth, no assets) ───────────────────────────────────────
+var actx = null, muted = false;
+function ensureAudio() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+function sfx(name) {
+  if (muted || !actx) return;
+  var base = actx.currentTime;
+  function tone(f, dur, type, vol, slide, when) {
+    var t = (when || 0) + base;
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t); o.stop(t + dur);
+  }
+  function noise(dur, vol, when) {
+    var t = (when || 0) + base;
+    var n = Math.floor(actx.sampleRate * dur);
+    var buf = actx.createBuffer(1, n, actx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    var src = actx.createBufferSource(); src.buffer = buf;
+    var f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1600; f.Q.value = 0.8;
+    var g = actx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f); f.connect(g); g.connect(actx.destination);
+    src.start(t); src.stop(t + dur);
+  }
+  switch (name) {
+    case 'shot':   noise(0.13, 0.55); tone(170, 0.16, 'square', 0.32, 55); break;
+    case 'hit':    tone(430, 0.24, 'square', 0.26, 110); noise(0.12, 0.4); break;
+    case 'flee':   tone(240, 0.3, 'sine', 0.2, 780); break;
+    case 'flap':   noise(0.05, 0.06); break;
+    case 'perfect': [523, 659, 784, 1046].forEach(function(f, i) { tone(f, 0.16, 'square', 0.2, null, i * 0.09); }); break;
+    case 'laugh':  [0, 1, 2].forEach(function(i) { tone(520, 0.26, 'sawtooth', 0.15, 370, i * 0.6); tone(330, 0.3, 'sawtooth', 0.13, 230, i * 0.6 + 0.04); }); break;
+    case 'start':  [392, 523, 659].forEach(function(f, i) { tone(f, 0.14, 'square', 0.18, null, i * 0.1); }); break;
+    case 'bonus':  tone(880, 0.12, 'square', 0.18); tone(659, 0.2, 'square', 0.16, null, 0.12); break;
+  }
+}
+
+// ── Game state ───────────────────────────────────────────────────────────────
+var state = 'title';                 // title | roundIntro | playing | roundEnd | gameover
+var score = 0, lives = 3, round = 1;
+var highScore = 0;
+try { highScore = parseInt(localStorage.getItem('floppyhunt-best') || '0', 10) || 0; } catch (e) {}
+var crosshair = { x: W / 2, y: H / 2 };
+var disks = [], effects = [];
+var pending = 0, concurrent = 1, activeCount = 0, hitsResolved = 0;
+var spawnT = 0, introT = 0, sceneT = 0, dogMode = 'laugh';
+var movingRound = false;
+var animT = 0;                       // global animation clock (ms)
+var rnd = Math.random;
+
+var DISK_COLORS = ['#ff3bd8', '#23d3ff', '#ffe31a', '#ff8a1e', '#6bff47', '#2f8bff'];
+var GROUND_Y = H - 56;               // top of the hedge row
+var SHOTS_PER_DISK = 2;
+var DISK_PTS = 500, MOVING_PTS = 1000, PERFECT_BONUS = 10000;
+
+// ── Round table (faithful to Duck Hunt's schedule) ──────────────────────────
+function roundSpec(n) {
+  var moving = (n % 5 === 0);
+  var total, con;
+  if (moving) { total = 5; con = 1; }
+  else if (n <= 3) { total = 3; con = 1; }
+  else if (n === 4 || n === 6 || n === 8) { total = n === 4 ? 6 : n; con = 2; }
+  else if (n === 7) { total = 7; con = 1; }
+  else if (n === 9) { total = 9; con = 3; }
+  else { total = 10; con = 2; }
+  return { moving: moving, total: total, concurrent: con, speed: 1 + (n - 1) * 0.055 * (moving ? 1.7 : 1) };
+}
+
+// ── Disk trajectories ────────────────────────────────────────────────────────
+// Each trajectory returns {x, y} for progress t in [0,1]. Disks bob and tilt
+// while flying; the metal shutter slides like a flapping wing.
+function makeTraj(spec, r) {
+  if (spec.moving) {
+    var dir = r() < 0.5 ? -1 : 1;
+    var y = 85 + r() * 150;
+    return {
+      dur: 3600 - 260 * spec.speed,
+      pos: function(t) {
+        var p = t;
+        return { x: (dir < 0 ? W + 70 : -70) + (dir < 0 ? -1 : 1) * p * (W + 140), y: y + Math.sin(p * 10) * 9 };
+      }
+    };
+  }
+  var kind = r();
+  if (kind < 0.4) {
+    // horizontal cross
+    var cdir = r() < 0.5 ? -1 : 1;
+    var cy = 95 + r() * 140;
+    var amp = 38 + r() * 42;
+    return {
+      dur: 4400 - 350 * spec.speed,
+      pos: function(t) {
+        var p = t;
+        return { x: (cdir < 0 ? W + 70 : -70) + (cdir < 0 ? -1 : 1) * p * (W + 140), y: cy + Math.sin(p * Math.PI) * amp + Math.sin(p * 13) * 6 };
+      }
+    };
+  }
+  // rise from the hedge and hover
+  var x0 = W * (0.12 + r() * 0.76);
+  var drift = (r() - 0.5) * 80;
+  var yTop = 78 + r() * 130;
+  return {
+    dur: 5000 - 350 * spec.speed,
+    pos: function(t) {
+      if (t < 0.3) {
+        var p = t / 0.3;
+        return { x: x0 + drift * p, y: H + 36 - (H + 36 - yTop) * p };
+      }
+      var u = (t - 0.3) / 0.7;
+      return { x: x0 + drift + Math.sin(u * 6.28) * 46, y: yTop + Math.sin(u * 11) * 16 };
+    }
+  };
+}
+
+// ── Disk lifecycle ───────────────────────────────────────────────────────────
+function spawnDisk() {
+  var spec = roundSpec(round);
+  var traj = makeTraj(spec, rnd);
+  disks.push({
+    x: 0, y: 0, rot: 0, spin: (rnd() - 0.5) * 0.3,
+    mode: 'fly', t: 0, traj: traj, dur: traj.dur,
+    flap: rnd() * TAU, flapSpeed: 0.15 + rnd() * 0.05 + spec.speed * 0.02,
+    color: DISK_COLORS[Math.floor(rnd() * DISK_COLORS.length)],
+    shots: SHOTS_PER_DISK, size: 56, r: 26,
+    trail: [], trailT: 0, flyT: 0, lifeT: 6500 + rnd() * 1500,
+    landT: 0, vy: 0, vx: 0, resolved: false
+  });
+  pending--; activeCount++;
+  sfx('flap');
+}
+
+function updateDisk(d, dt) {
+  var ms = dt * 16.667;
+  d.t += ms;
+  if (d.mode === 'fly') {
+    var p = clamp(d.t / d.dur, 0, 1);
+    var pos = d.traj.pos(p);
+    d.x = pos.x; d.y = pos.y;
+    d.flap += dt * d.flapSpeed * 60;
+    d.rot = Math.sin(d.flap) * 0.045;
+    d.trailT += ms;
+    if (d.trailT > 26) { d.trailT = 0; d.trail.unshift({ x: d.x, y: d.y }); if (d.trail.length > 5) d.trail.pop(); }
+    d.flyT += ms;
+    if (d.flyT > d.lifeT) { fleetDisk(d); return; }
+    if (p >= 1) { // path done: keep flying around in place
+      d.t = 0; d.traj = makeTraj(roundSpec(round), rnd);
+      d.dur = d.traj.dur;
+    }
+  } else if (d.mode === 'flee') {
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.rot += d.spin * dt;
+    if (d.x < -90 || d.x > W + 90 || d.y < -90 || d.y > H + 90) resolveDisk(d, false);
+  } else if (d.mode === 'fall') {
+    d.vy += 0.55 * dt;
+    d.y += d.vy * dt;
+    d.x += d.vx * dt;
+    d.rot += d.spin * dt;
+    if (d.y > GROUND_Y + 8) {
+      d.y = GROUND_Y + 8; d.vy = -d.vy * 0.32;
+      if (Math.abs(d.vy) < 2.2) { d.landT += ms; d.vy = 0; }
+    }
+    if (d.landT > 450) resolveDisk(d, true);
+  }
+}
+
+function resolveDisk(d, hit) {
+  if (d.resolved) return;
+  d.resolved = true;
+  activeCount--;
+  if (hit) hitsResolved++;
+  else sfx('flee');
+  if (pending > 0 && spawnT > 150) spawnT = 150;
+}
+
+function fleetDisk(d) {
+  if (d.mode !== 'fly') return;
+  d.mode = 'flee';
+  var a = Math.atan2(-(H + 120) + d.y, (d.x < W / 2 ? -1 : 1) * (W + 120) - d.x);
+  var sp = 6.5;
+  d.vx = Math.cos(a) * sp; d.vy = Math.sin(a) * sp;
+  d.spin = d.spin * 2 + 0.15;
+}
+
+// ── Shooting ─────────────────────────────────────────────────────────────────
+function fire() {
+  if (state !== 'playing') return;
+  ensureAudio();
+  sfx('shot');
+  effects.push({ kind: 'flash', t: 0, life: 90, x: BX, y: BY, r: 10 });
+  effects.push({ kind: 'bang', t: 0, life: 420, x: crosshair.x, y: crosshair.y - 26 });
+  effects.push({ kind: 'casing', t: 0, life: 700, x: BX, y: BY - 4, vx: 2.4, vy: -4.6, rot: 0 });
+  for (var i = 0; i < 5; i++) {
+    effects.push({ kind: 'smoke', t: 0, life: 520, x: BX, y: BY, vx: (rnd() - 0.5) * 1.6, vy: -1.4 - rnd() * 1.2, r: 2 + rnd() * 3 });
+  }
+  // topmost disk under the crosshair wins the shot
+  var hit = null;
+  for (var d = disks.length - 1; d >= 0; d--) {
+    var disk = disks[d];
+    if (disk.mode !== 'fly') continue;
+    var dx = crosshair.x - disk.x, dy = crosshair.y - disk.y;
+    if (dx * dx + dy * dy < disk.r * disk.r) { hit = disk; break; }
+  }
+  if (hit) {
+    hit.mode = 'fall';
+    hit.vy = -2.2; hit.vx = (rnd() - 0.5) * 2.2;
+    hit.spin = (rnd() < 0.5 ? -1 : 1) * 0.4;
+    hit.trail = [];
+    var pts = movingRound ? MOVING_PTS : DISK_PTS;
+    score += pts;
+    sfx('hit');
+    effects.push({ kind: 'pop', t: 0, life: 900, x: hit.x, y: hit.y - 34, text: '+' + pts, color: '#ffe31a' });
+    effects.push({ kind: 'ring', t: 0, life: 320, x: hit.x, y: hit.y, r: 20 });
+  } else {
+    // a miss consumes a shot from the disk nearest the crosshair
+    var best = null, bd = 1e9;
+    for (var e = 0; e < disks.length; e++) {
+      var dd = disks[e];
+      if (dd.mode !== 'fly') continue;
+      var ad = Math.abs(dd.x - crosshair.x) + Math.abs(dd.y - crosshair.y);
+      if (ad < bd) { bd = ad; best = dd; }
+    }
+    if (best) { best.shots--; if (best.shots <= 0) fleetDisk(best); }
+  }
+}
+
+// ── Round state machine ──────────────────────────────────────────────────────
+function startGame() {
+  score = 0; lives = 3;
+  try { highScore = parseInt(localStorage.getItem('floppyhunt-best') || '0', 10) || 0; } catch (e) {}
+  startRound(1);
+  sfx('start');
+}
+
+function startRound(n) {
+  round = n;
+  var spec = roundSpec(n);
+  movingRound = spec.moving;
+  pending = spec.total;
+  concurrent = spec.concurrent;
+  activeCount = 0; hitsResolved = 0;
+  disks = []; effects = [];
+  spawnT = 1; introT = 1500;
+  state = 'roundIntro';
+  if (movingRound) sfx('bonus');
+}
+
+function nextRound() { startRound(round + 1); }
+
+function advance() {
+  if (state === 'title') startGame();
+  else if (state === 'roundIntro') { introT = 0; }
+  else if (state === 'playing') fire();
+  else if (state === 'roundEnd') { finishRoundEnd(); }
+  else if (state === 'gameover') { state = 'title'; }
+}
+
+function finishRoundEnd() {
+  if (dogMode === 'laugh') {
+    if (lives <= 0) { state = 'gameover'; saveScore(); }
+    else nextRound();
+  } else {
+    nextRound();
+  }
+}
+
+function saveScore() {
+  if (score > highScore) {
+    highScore = score;
+    try { localStorage.setItem('floppyhunt-best', String(highScore)); } catch (e) {}
+  }
+}
+
+// ── Static background (pre-rendered) ─────────────────────────────────────────
+var bg = document.createElement('canvas');
+bg.width = W; bg.height = H;
+var bgc = bg.getContext('2d');
+var CLOUDS = [];
+
+function buildBg() {
+  var b = bgc;
+  // sky gradient
+  var g = b.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#1259e8');
+  g.addColorStop(0.42, '#3fa9ff');
+  g.addColorStop(0.62, '#8fdcff');
+  g.addColorStop(0.7, '#ffd89a');
+  b.fillStyle = g;
+  b.fillRect(0, 0, W, H);
+
+  // sun body (rays are animated, drawn per-frame)
+  b.fillStyle = '#ffe84a';
+  b.beginPath(); b.arc(84, 74, 34, 0, TAU); b.fill();
+  b.fillStyle = '#fff9c4';
+  b.beginPath(); b.arc(78, 68, 24, 0, TAU); b.fill();
+
+  // far hills
+  b.fillStyle = '#2f9f8f';
+  b.beginPath(); b.moveTo(0, 268);
+  b.quadraticCurveTo(140, 210, 260, 252);
+  b.quadraticCurveTo(380, 292, 520, 236);
+  b.lineTo(W, 236); b.lineTo(W, 300); b.lineTo(0, 300);
+  b.closePath(); b.fill();
+  b.fillStyle = '#37b39a';
+  b.beginPath(); b.moveTo(0, 290);
+  b.quadraticCurveTo(120, 248, 250, 278);
+  b.quadraticCurveTo(420, 310, W, 262);
+  b.lineTo(W, 330); b.lineTo(0, 330);
+  b.closePath(); b.fill();
+
+  // mid forest undergrowth (trees are painted as sprites by paintNature)
+  b.fillStyle = '#2c8f3f';
+  b.fillRect(0, 306, W, 56);
+
+  // field
+  var fg = b.createLinearGradient(0, 330, 0, H);
+  fg.addColorStop(0, '#53d645');
+  fg.addColorStop(1, '#2e9e33');
+  b.fillStyle = fg;
+  b.fillRect(0, 330, W, H - 330);
+  // mowed stripes
+  for (var st = 0; st < 6; st++) {
+    b.fillStyle = st % 2 ? 'rgba(255,255,255,0.05)' : 'rgba(0,60,20,0.06)';
+    b.fillRect(st * W / 6, 330, W / 6, H - 330);
+  }
+
+  // hedge row base (Kenney bushes painted on top by paintNature)
+  b.fillStyle = '#1f6e2c';
+  b.fillRect(0, GROUND_Y - 8, W, H - GROUND_Y + 8);
+  b.fillStyle = '#2a8a3a';
+  b.beginPath(); b.moveTo(0, GROUND_Y + 14); b.lineTo(0, GROUND_Y - 2); b.lineTo(30, GROUND_Y - 22);
+  b.quadraticCurveTo(90, GROUND_Y - 52, 150, GROUND_Y - 16);
+  b.quadraticCurveTo(220, GROUND_Y - 46, 300, GROUND_Y - 14);
+  b.quadraticCurveTo(380, GROUND_Y - 52, 460, GROUND_Y - 16);
+  b.quadraticCurveTo(540, GROUND_Y - 42, 610, GROUND_Y - 10);
+  b.lineTo(W, GROUND_Y - 4); b.lineTo(W, H); b.lineTo(0, H);
+  b.closePath(); b.fill();
+
+  // clouds (drift per-frame; speed in px/s)
+  CLOUDS = [];
+  for (var c = 0; c < 6; c++) {
+    CLOUDS.push({ x: rnd() * W, y: 20 + rnd() * 140, s: 0.7 + rnd() * 1.0, v: 6 + rnd() * 10 });
+  }
+}
+
+// ── Paint open-source sprites onto the static background ────────────────────
+function paintNature() {
+  var b = bgc;
+  function dr(s) { var x = Math.sin(s * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+  function img(name) { return IMG[name]; }
+  function drawSpr(name, cx, baseY, scale) {
+    var im = img(name);
+    if (!im) return;
+    var w = im.width * scale, h = im.height * scale;
+    b.drawImage(im, cx - w / 2, baseY - h, w, h);
+  }
+  var TREES = ['tree_oak', 'tree_detailed', 'tree_default', 'tree_pineRoundA', 'tree_cone'];
+  var BUSHES = ['plant_bush', 'plant_bushLarge', 'plant_bushDetailed', 'plant_bushTriangle'];
+  var FLOWERS = ['flower_redA', 'flower_redB', 'flower_yellowA', 'flower_purpleA'];
+  // back row of trees (small, on the far forest band)
+  for (var i = 0; i < 7; i++) {
+    drawSpr(TREES[i % TREES.length], 40 + i * 92 + dr(i * 11 + 3) * 40, 336, 0.45 + dr(i * 17 + 1) * 0.22);
+  }
+  // front row of trees (bigger, trunks on the grass line)
+  for (var j = 0; j < 8; j++) {
+    drawSpr(TREES[(j * 3 + 1) % TREES.length], -14 + j * 86 + dr(j * 13 + 7) * 36, 352, 0.7 + dr(j * 19 + 5) * 0.4);
+  }
+  // hedge: a dense row of bushes along the bottom
+  for (var hx = 6; hx < W; hx += 34) {
+    drawSpr(BUSHES[Math.floor(dr(hx * 3 + 1) * BUSHES.length)], hx + dr(hx * 7 + 2) * 24, GROUND_Y + 4, 1.4 + dr(hx * 5 + 3) * 0.9);
+  }
+  // flowers and grass tufts scattered in the field
+  for (var fi = 0; fi < 46; fi++) {
+    drawSpr(FLOWERS[Math.floor(dr(fi * 7 + 11) * FLOWERS.length)], dr(fi * 13 + 17) * W, 352 + dr(fi * 3 + 23) * (H - 380), 1.0 + dr(fi * 5 + 29) * 0.7);
+  }
+  for (var gi = 0; gi < 34; gi++) {
+    drawSpr('grass_leafs', dr(gi * 11 + 31) * W, 344 + dr(gi * 7 + 37) * (H - 384), 1.0 + dr(gi * 9 + 41) * 0.8);
+  }
+}
+
+function drawCloud(c) {
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, 12 * c.s, 0, TAU);
+  ctx.arc(c.x + 14 * c.s, c.y - 6 * c.s, 10 * c.s, 0, TAU);
+  ctx.arc(c.x + 28 * c.s, c.y, 12 * c.s, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillRect(c.x - 4 * c.s, c.y + 6 * c.s, 40 * c.s, 6 * c.s);
+}
+
+function drawSky(dt) {
+  ctx.drawImage(bg, 0, 0);
+  var s = dt * 0.016667;
+  // rotating sun rays
+  var r = animT * 0.0016;
+  ctx.save();
+  ctx.translate(84, 74);
+  ctx.rotate(r);
+  ctx.fillStyle = 'rgba(255,236,120,0.5)';
+  for (var i = 0; i < 8; i++) {
+    ctx.rotate(TAU / 8);
+    ctx.fillRect(44, -3, 16, 6);
+  }
+  ctx.restore();
+  // drifting clouds
+  for (var c = 0; c < CLOUDS.length; c++) {
+    CLOUDS[c].x += CLOUDS[c].v * s;
+    if (CLOUDS[c].x > W + 60) CLOUDS[c].x = -60;
+    drawCloud(CLOUDS[c]);
+  }
+}
+
+// ── Floppy disk sprite ───────────────────────────────────────────────────────
+function drawWing(px, py, ang, dir, color) {
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.scale(dir, 1);
+  ctx.rotate(ang);
+  var wl = 16, ww = 7.5;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(-wl * 0.45, -ww, -wl, -ww * 1.15);
+  ctx.quadraticCurveTo(-wl * 1.05, 0, -wl, ww * 0.95);
+  ctx.quadraticCurveTo(-wl * 0.5, ww * 0.6, 0, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // feather highlight
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-wl * 0.3, -ww * 0.5);
+  ctx.lineTo(-wl * 0.85, -ww * 0.6);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawDiskSprite(x, y, rot, color, size, flap, tumbling) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  var w = size, h = size * 0.82;
+  var ox = -w / 2, oy = -h / 2;
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.roundRect(ox + 3, oy + 5, w, h, 5); ctx.fill();
+  // flapping wings (behind the body)
+  var wingCol = lighten(color, 100);
+  var wingAng = tumbling ? 0.25 : 0.3 + Math.sin(flap) * 1.05;
+  drawWing(ox + w * 0.24, oy + h * 0.24, wingAng, 1, wingCol);
+  drawWing(ox + w * 0.76, oy + h * 0.24, wingAng, -1, wingCol);
+  if (tumbling) {
+    // corrupted disk: dark body, no label
+    ctx.fillStyle = '#23232b';
+    ctx.beginPath(); ctx.roundRect(ox, oy, w, h, 5); ctx.fill();
+    ctx.strokeStyle = '#4a4a58'; ctx.lineWidth = 1;
+    ctx.strokeRect(ox + 1, oy + 1, w - 2, h - 2);
+    ctx.fillStyle = '#ff2a2a';
+    ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('CORRUPTED', 0, 0);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.moveTo(-w / 4, -h / 3); ctx.lineTo(w / 4, h / 3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w / 4, -h / 3); ctx.lineTo(-w / 4, h / 3); ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  // plastic body
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(ox, oy, w, h, 5); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.beginPath(); ctx.roundRect(ox, oy + h * 0.78, w, h * 0.22, 5); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1;
+  ctx.strokeRect(ox + 0.5, oy + 0.5, w - 1, h - 1);
+  // corner holes
+  ctx.fillStyle = '#0a0a0e';
+  ctx.fillRect(ox + 4, oy + 3, 4, 4);
+  ctx.fillRect(ox + w - 8, oy + 3, 4, 4);
+  // paper label
+  var lx = ox + 4, ly = oy + 8, lw = w - 8, lh = h - 26;
+  ctx.fillStyle = '#f4f4e4';
+  ctx.beginPath(); ctx.roundRect(lx, ly, lw, lh, 2); ctx.fill();
+  ['#ff3b3b', '#ffb020', '#28c928'].forEach(function(col, i) {
+    ctx.fillStyle = col;
+    ctx.fillRect(lx + 2, ly + 3 + i * 4, lw - 4, 2.4);
+  });
+  ctx.fillStyle = '#222';
+  ctx.font = 'bold ' + Math.max(6, w * 0.13) + 'px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('1.44', lx + 3, ly + lh - 7);
+  ctx.font = Math.max(5, w * 0.1) + 'px monospace';
+  ctx.fillText('HD  DOS', lx + 3, ly + lh - 1);
+  // metal shutter
+  var shW = w * 0.44, shH = h * 0.28;
+  var shx = ox + (w - shW) / 2, shy = oy + h - shH - 3;
+  ctx.fillStyle = '#a4a4ae';
+  ctx.fillRect(shx, shy, shW, shH);
+  ctx.fillStyle = '#c8c8d2'; ctx.fillRect(shx, shy, shW, 2);
+  ctx.fillStyle = '#6e6e78'; ctx.fillRect(shx + shW - 2, shy, 2, shH);
+  ctx.fillStyle = '#141418';
+  ctx.fillRect(shx + 3, shy + shH - 8, 7, 5);
+  ctx.fillStyle = '#5c5c66';
+  ctx.fillRect(shx + shW - 7, shy + shH - 8, 4, 5);
+  // insertion arrow
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath();
+  ctx.moveTo(ox + 5, oy + h - 8);
+  ctx.lineTo(ox + 9, oy + h - 12);
+  ctx.lineTo(ox + 9, oy + h - 4);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function drawDisk(d) {
+  // trail ghosts
+  for (var i = 0; i < d.trail.length; i++) {
+    var g = d.trail[i];
+    ctx.save();
+    ctx.globalAlpha = 0.16 * (1 - i / d.trail.length);
+    drawDiskSprite(g.x, g.y, d.rot, d.color, d.size * 0.9, d.flap, false);
+    ctx.restore();
+  }
+  var tumbling = d.mode === 'fall';
+  drawDiskSprite(d.x, d.y, d.rot, d.color, d.size, tumbling ? 0 : d.flap, tumbling);
+}
+
+// ── The dog (CC0 sprite from pzUH's "Cat & Dog" pack) ───────────────────────
+// The sprite faces left. `flip` mirrors it to face right. The dog is drawn
+// clipped to the area above the hedge so it appears to pop out from behind.
+function drawDogSprite(name, cx, feetY, scale, flip) {
+  var im = IMG[name];
+  if (!im) return;
+  var w = im.width * scale, h = im.height * scale;
+  ctx.save();
+  ctx.translate(cx, feetY);
+  if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(im, -w / 2, -h, w, h);
+  ctx.restore();
+}
+
+function dogFrame(t, speed) {
+  var i = Math.floor(t * (speed || 12));
+  return 'dog_jump' + ((i % 4) + 1);
+}
+
+function comicText(text, x, y, t, col) {
+  var s = 1 + 0.3 * Math.sin(Math.min(1, t) * Math.PI);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.font = 'bold 22px "Cascadia Code", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 5; ctx.strokeStyle = '#1a1a1a';
+  ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = col || '#ffffff';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+// ── Effects ───────────────────────────────────────────────────────────────────
+var BX = W - 66, BY = H - 30; // gun barrel tip
+
+function updateEffects(dt) {
+  var ms = dt * 16.667;
+  for (var i = effects.length - 1; i >= 0; i--) {
+    var e = effects[i];
+    e.t += ms;
+    if (e.t >= e.life) { effects.splice(i, 1); continue; }
+    if (e.kind === 'smoke') { e.x += e.vx; e.y += e.vy; e.r += 0.02; }
+    if (e.kind === 'casing') {
+      e.vy += 0.35; e.x += e.vx; e.y += e.vy; e.rot += 0.3;
+      if (e.y > H - 8) { e.y = H - 8; e.vy *= -0.35; }
+    }
+  }
+}
+
+function drawEffects() {
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    var a = 1 - e.t / e.life;
+    if (e.kind === 'pop') {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 20px "Cascadia Code", monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = '#1a1a1a';
+      ctx.strokeText(e.text, e.x, e.y - e.t * 0.05);
+      ctx.fillStyle = e.color;
+      ctx.fillText(e.text, e.x, e.y - e.t * 0.05);
+      ctx.restore();
+    } else if (e.kind === 'bang') {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.font = 'bold 26px "Cascadia Code", monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 6; ctx.strokeStyle = '#1a1a1a';
+      ctx.strokeText('BANG', e.x, e.y);
+      ctx.fillStyle = '#ffe31a';
+      ctx.fillText('BANG', e.x, e.y);
+      ctx.restore();
+    } else if (e.kind === 'smoke') {
+      ctx.fillStyle = 'rgba(220,220,220,' + (0.4 * a) + ')';
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill();
+    } else if (e.kind === 'casing') {
+      ctx.save();
+      ctx.translate(e.x, e.y); ctx.rotate(e.rot);
+      ctx.fillStyle = '#e8b020';
+      ctx.fillRect(-2, -4, 4, 8);
+      ctx.fillStyle = '#a87c10';
+      ctx.fillRect(-2, 3, 4, 1);
+      ctx.restore();
+    } else if (e.kind === 'ring') {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + (1 - a) * 40, 0, TAU); ctx.stroke();
+      ctx.restore();
+    } else if (e.kind === 'flash') {
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(animT * 0.05);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#fff7c4';
+      for (var k = 0; k < 4; k++) {
+        ctx.rotate(Math.PI / 2);
+        ctx.beginPath();
+        ctx.moveTo(0, -26); ctx.lineTo(7, 0); ctx.lineTo(0, 26); ctx.lineTo(-7, 0);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(0, 0, 9, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+// ── HUD & overlays ───────────────────────────────────────────────────────────
+function hudText(text, x, y, size, color, align, shadow) {
+  ctx.font = 'bold ' + size + 'px "Cascadia Code", monospace';
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = 'middle';
+  if (shadow) { ctx.lineWidth = size * 0.24; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(text, x, y); }
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function drawHUD() {
+  hudText('SCORE', 14, 18, 12, '#cfe8ff', 'left', true);
+  hudText(String(score), 14, 38, 22, '#ffe31a', 'left', true);
+  hudText('ROUND', W - 14, 18, 12, '#cfe8ff', 'right', true);
+  hudText(String(round), W - 14, 38, 22, '#8cf0ff', 'right', true);
+  if (movingRound) {
+    hudText('MOVING DISKS', W / 2, 16, 12, '#ff9df0', 'center', true);
+  }
+  // lives (mini disk icons)
+  for (var i = 0; i < lives; i++) {
+    drawDiskSprite(22 + i * 34, H - 20, 0, '#23d3ff', 24, 0, false);
+  }
+  // high score
+  hudText('HI ' + highScore, W / 2, H - 20, 12, '#a8e8a0', 'center', true);
+}
+
+function drawBarrel() {
+  // gun barrel at bottom-right, pointing up
+  ctx.save();
+  ctx.translate(W - 40, H - 8);
+  ctx.rotate(-0.7);
+  ctx.fillStyle = '#2c2c30';
+  ctx.fillRect(-6, -34, 20, 34);
+  ctx.fillStyle = '#3a3a40';
+  ctx.fillRect(-6, -34, 8, 34);
+  ctx.fillStyle = '#1c1c20';
+  ctx.fillRect(-2, -36, 10, 4);
+  ctx.fillStyle = '#6a5a2a';
+  ctx.fillRect(-6, -8, 20, 4);
+  ctx.restore();
+}
+
+// ── Crosshair ─────────────────────────────────────────────────────────────────
+function drawCrosshair() {
+  var x = crosshair.x, y = crosshair.y;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.stroke();
+  ctx.strokeStyle = '#ff2a2a';
+  ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -21); ctx.lineTo(0, -16);
+  ctx.moveTo(0, 16); ctx.lineTo(0, 21);
+  ctx.moveTo(-21, 0); ctx.lineTo(-16, 0);
+  ctx.moveTo(16, 0); ctx.lineTo(21, 0);
+  ctx.stroke();
+  ctx.fillStyle = '#ff2a2a';
+  ctx.fillRect(-2, -2, 4, 4);
+  ctx.restore();
+}
+
+// ── Screens ───────────────────────────────────────────────────────────────────
+function drawTitle() {
+  drawSky(0);
+  // decorative disks drifting
+  for (var i = 0; i < 3; i++) {
+    var dx = (W / 2 + Math.sin(animT * 0.0006 + i * 2.1) * (W * 0.34));
+    var dy = 190 + Math.sin(animT * 0.0008 + i * 4) * 26 + i * 30;
+    drawDiskSprite(dx, dy, Math.sin(animT * 0.004 + i) * 0.5, DISK_COLORS[i], 46, animT * 0.01 + i, false);
+  }
+  // dark panel
+  ctx.fillStyle = 'rgba(6,20,40,0.62)';
+  ctx.fillRect(0, 0, W, H);
+  hudText('FLOPPY', W / 2, 120, 74, '#8cf0ff', 'center', true);
+  hudText('HUNT', W / 2, 200, 74, '#ff3bd8', 'center', true);
+  hudText('RELOAD A DISK.  TRACK IT.  HUNT IT.', W / 2, 250, 14, '#ffffff', 'center', true);
+  hudText('HI-SCORE  ' + highScore, W / 2, 280, 14, '#ffe31a', 'center', true);
+  if (Math.floor(animT / 480) % 2 === 0) {
+    hudText('PRESS START', W / 2, 330, 26, '#7dff8a', 'center', true);
+  }
+  hudText('MOUSE: aim   LEFT CLICK / SPACE: shoot', W / 2, 376, 12, '#cfe8ff', 'center', true);
+  hudText('2 shots per disk  -  PERFECT round = +' + PERFECT_BONUS, W / 2, 396, 12, '#cfe8ff', 'center', true);
+  hudText('Watch out for the dog.', W / 2, 416, 12, '#ffb0b0', 'center', true);
+  // dog peeking over the hedge in the corner
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, GROUND_Y); ctx.clip();
+  drawDogSprite('dog_idle', W - 74, GROUND_Y + 6, 0.6, false);
+  ctx.restore();
+}
+
+function drawRoundIntro() {
+  var t = 1 - introT / 1500;
+  var s = 0.6 + 0.4 * Math.min(1, t * 4);
+  hudText(movingRound ? 'MOVING DISKS!' : 'ROUND ' + round, W / 2, H / 2, 54, movingRound ? '#ff9df0' : '#ffe31a', 'center', true);
+  if (movingRound) {
+    hudText('Faster. Worth ' + MOVING_PTS + ' each.', W / 2, H / 2 + 44, 16, '#cfe8ff', 'center', true);
+  }
+}
+
+function drawRoundEnd() {
+  var t = sceneT;
+  if (dogMode === 'laugh') {
+    // dog bursts out of the hedge, jumping with joy, laughing
+    var rise = t < 0.35 ? t / 0.35 : t > 2.4 ? Math.max(0, (2.85 - t) / 0.45) : 1;
+    var bob = Math.sin(t * 9) * 16 * rise;
+    var dx = W * 0.5 + 125;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, W, GROUND_Y); ctx.clip();
+    drawDogSprite(dogFrame(t, 5), dx, GROUND_Y + 8 + bob - (1 - rise) * 90, 0.62, false);
+    ctx.restore();
+    var li = Math.min(2, Math.floor((t - 0.45) / 0.72));
+    if (t > 0.45 && li >= 0) {
+      var lt = (t - 0.45 - li * 0.72) / 0.72;
+      if (lt < 1) comicText('YAHOO!', dx, GROUND_Y - 96 - bob, Math.min(1, lt * 2.5), ['#ffffff', '#ff3bd8', '#8cf0ff'][li]);
+    }
+    hudText('MISSED ONE...', W / 2, 44, 20, '#ffb0b0', 'center', true);
+  } else {
+    // dog peeks out of the hedge proudly holding the disk
+    var pp = t < 0.3 ? t / 0.3 : 1;
+    var bob = Math.sin(t * 10) * 6 * pp;
+    var px = W * 0.3;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, W, GROUND_Y); ctx.clip();
+    drawDogSprite('dog_idle', px, GROUND_Y + 6 + bob - (1 - pp) * 90, 0.56, true);
+    ctx.restore();
+    drawDiskSprite(px + 68, GROUND_Y - 30 + bob - (1 - pp) * 90, Math.sin(t * 0.01) * 0.3, '#ffe31a', 34, 0, false);
+    var bs = 0.5 + 0.5 * Math.min(1, (t - 0.1) * 5);
+    hudText('PERFECT!!', W / 2, H / 2 - 20, 56, '#ffe31a', 'center', true);
+    hudText('+' + PERFECT_BONUS + ' BONUS', W / 2, H / 2 + 34, 24, '#7dff8a', 'center', true);
+  }
+}
+
+function drawGameOver() {
+  drawSky(0);
+  ctx.fillStyle = 'rgba(10,0,20,0.7)';
+  ctx.fillRect(0, 0, W, H);
+  hudText('GAME OVER', W / 2, 150, 56, '#ff2a2a', 'center', true);
+  hudText('SCORE  ' + score, W / 2, 230, 26, '#ffffff', 'center', true);
+  var isNew = score >= highScore && score > 0;
+  hudText(isNew ? 'NEW HI-SCORE!' : 'HI-SCORE  ' + highScore, W / 2, 268, 18, isNew ? '#ffe31a' : '#a8e8a0', 'center', true);
+  if (isNew) { try { localStorage.setItem('floppyhunt-best', String(highScore)); } catch (e) {} }
+  hudText('ROUNDS SURVIVED: ' + (round - 1), W / 2, 300, 16, '#cfe8ff', 'center', true);
+  if (Math.floor(animT / 480) % 2 === 0) {
+    hudText('PRESS START TO PLAY AGAIN', W / 2, 360, 22, '#8cf0ff', 'center', true);
+  }
+  // laughing dog hops over the hedge on the right
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, GROUND_Y); ctx.clip();
+  drawDogSprite(dogFrame(animT / 1000, 4), W * 0.5 + 190, GROUND_Y + 8 + Math.sin(animT * 0.02) * 14, 0.62, false);
+  ctx.restore();
+}
+
+// ── Round flow update ─────────────────────────────────────────────────────────
+function updatePlaying(dt) {
+  spawnT -= dt * 16.667;
+  if (spawnT <= 0 && pending > 0 && activeCount < concurrent) {
+    spawnDisk();
+    spawnT = 380;
+  }
+  for (var i = disks.length - 1; i >= 0; i--) {
+    updateDisk(disks[i], dt);
+  }
+  // round complete?
+  if (pending === 0 && activeCount === 0) {
+    if (hitsResolved === roundSpec(round).total) {
+      score += PERFECT_BONUS;
+      sfx('perfect');
+      dogMode = 'peek';
+      state = 'roundEnd';
+      sceneT = 0;
+    } else {
+      sfx('laugh');
+      dogMode = 'laugh';
+      lives--;
+      state = 'roundEnd';
+      sceneT = 0;
+    }
+  }
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+var lastTime = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!lastTime) lastTime = now;
+  var elapsed = Math.min(100, now - lastTime);
+  lastTime = now;
+  var dt = elapsed / 16.667;
+  animT += elapsed;
+
+  drawSky(dt);
+
+  if (state === 'title') {
+    drawTitle();
+  } else if (state === 'roundIntro') {
+    for (var i = 0; i < disks.length; i++) drawDisk(disks[i]);
+    introT -= elapsed;
+    if (introT <= 0) { state = 'playing'; spawnT = 0; }
+    drawRoundIntro();
+    drawHUD();
+  } else if (state === 'playing') {
+    updateEffects(dt);
+    updatePlaying(dt);
+    for (var j = 0; j < disks.length; j++) drawDisk(disks[j]);
+    drawBarrel();
+    drawEffects();
+    drawHUD();
+  } else if (state === 'roundEnd') {
+    updateEffects(dt);
+    for (var k = 0; k < disks.length; k++) drawDisk(disks[k]);
+    sceneT += elapsed / 1000;
+    drawRoundEnd();
+    drawHUD();
+    if (sceneT > 3.0) finishRoundEnd();
+  } else if (state === 'gameover') {
+    drawGameOver();
+  }
+
+  drawCrosshair();
+}
+requestAnimationFrame(loop);
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', function(e) {
+  var r = canvas.getBoundingClientRect();
+  crosshair.x = (e.clientX - r.left) / r.width * W;
+  crosshair.y = (e.clientY - r.top) / r.height * H;
+});
+
+canvas.addEventListener('mousedown', function(e) {
+  e.preventDefault();
+  ensureAudio();
+  canvas.focus();
+  var r = canvas.getBoundingClientRect();
+  crosshair.x = (e.clientX - r.left) / r.width * W;
+  crosshair.y = (e.clientY - r.top) / r.height * H;
+  advance();
+});
+
+canvas.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  ensureAudio();
+  var r = canvas.getBoundingClientRect();
+  crosshair.x = (e.touches[0].clientX - r.left) / r.width * W;
+  crosshair.y = (e.touches[0].clientY - r.top) / r.height * H;
+  advance();
+}, { passive: false });
+
+function onKey(e) {
+  if (e.code === 'Space' || e.key === ' ') {
+    e.preventDefault();
+    advance();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (state === 'title' || state === 'gameover') advance();
+  } else if (e.key === 'm' || e.key === 'M') {
+    muted = !muted;
+  }
+}
+canvas.addEventListener('keydown', onKey);
+document.addEventListener('keydown', onKey);
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+buildBg();
+loadAssets();
+state = 'title';
+canvas.focus();
+
+// Read-only test hook (used by the Node DOM-stub smoke test)
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, '__floppyhunt', {
+    value: {
+      get state() { return state; },
+      get score() { return score; },
+      get lives() { return lives; },
+      get round() { return round; },
+      get disks() { return disks.slice(); },
+      get movingRound() { return movingRound; },
+      fire: fire
+    },
+    configurable: true
+  });
+}
+})();
+</script>
+</body>
+</html>

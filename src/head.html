@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>guest@securit:~$</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace; font-size: 14px; overflow: hidden; }
+#terminal { height: 100%; padding: 12px; overflow-y: auto; cursor: text; }
+#terminal::-webkit-scrollbar { width: 8px; }
+#terminal::-webkit-scrollbar-track { background: #1a1a1a; }
+#terminal::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+.line { white-space: pre-wrap; word-wrap: break-word; line-height: 1.4; }
+.prompt-user { color: #57c457; }
+.prompt-sep { color: #d4d4d4; }
+.prompt-path { color: #5f87d7; }
+.prompt-dollar { color: #d4d4d4; }
+#input-line { line-height: 1.4; white-space: pre; }
+#input { position: fixed; left: -9999px; top: 0; opacity: 0; }
+#typed { color: #d4d4d4; }
+.dir-name { color: #5f87d7; font-weight: bold; }
+#cursor { display: inline-block; width: 8px; height: 1.2em; background: #d4d4d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; }
+@keyframes blink { 50% { opacity: 0; } }
+#sl-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:#0a0a0a; z-index:2000; overflow:hidden; }
+#sl-pre { position:absolute; top:0; left:0; margin:0; padding:8px; color:#d4d4d4; font-family:'Cascadia Code','Fira Code','JetBrains Mono','Consolas','Monaco',monospace; font-size:14px; line-height:1.4; white-space:pre; }
+#vi-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:#0a0a0a; z-index:2000; overflow:hidden; }
+#vi-pre { position:absolute; top:0; left:0; margin:0; padding:8px; color:#d4d4d4; font-family:'Cascadia Code','Fira Code','JetBrains Mono','Consolas','Monaco',monospace; font-size:14px; line-height:1.4; white-space:pre; }
+.vi-inv { background:#d4d4d4; color:#0a0a0a; }
+.vi-tilde { color:#5f87d7; }
+/* X11 Window Manager - Motif/CDE style */
+.x11-window { position: fixed; background: #b4b4b4; border: 2px outset #d8d8d8; box-shadow: 2px 2px 8px rgba(0,0,0,0.5); z-index: 1000; min-width: 320px; min-height: 240px; display: flex; flex-direction: column; }
+.x11-titlebar { display: flex; align-items: center; height: 24px; background: linear-gradient(to bottom, #c8c8c8, #a0a0a0); border-bottom: 2px groove #888; padding: 0 3px; cursor: default; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
+.x11-title { flex: 1; text-align: center; font-family: 'Helvetica', 'Arial', sans-serif; font-size: 12px; font-weight: bold; color: #000; padding: 0 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 1px inset #999; background: #b0b0b0; margin: 2px 4px; line-height: 18px; }
+.x11-btn { width: 18px; height: 18px; background: #b4b4b4; border: 2px outset #d8d8d8; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; font-weight: bold; color: #000; padding: 0; line-height: 1; }
+.x11-btn:active { border-style: inset; }
+.x11-body { flex: 1; border: 2px inset #999; margin: 3px; overflow: hidden; background: #000; }
+.x11-body iframe { width: 100%; height: 100%; border: none; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script>

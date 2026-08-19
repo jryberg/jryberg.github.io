@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript with no build system. The only code dependency is Babylon.js (+ its glTF loaders plugin), loaded from the jsdelivr CDN by `deerhunt.html` (version-pinned with SRI integrity hashes — recompute the hashes when bumping the version). `assets/` holds 3D models used by the game — CC0 by Quaternius plus two CC-BY 3.0 by Google Poly, all sourced in `assets/LICENSE.txt` (keep the CC-BY attribution when touching credits); the deploy pipeline copies the whole directory.
+Personal website for securit.se — a single-page terminal emulator that simulates a Unix shell experience. Pure static HTML/CSS/JavaScript. The terminal itself is assembled from ordered `src/` snippets by a zero-dependency `node build.js` (concatenation only, no transpilation); the only code dependency is Babylon.js (+ its glTF loaders plugin), loaded from the jsdelivr CDN by `deerhunt.html` (version-pinned with SRI integrity hashes — recompute the hashes when bumping the version). `assets/` holds 3D models used by the game — CC0 by Quaternius plus two CC-BY 3.0 by Google Poly, all sourced in `assets/LICENSE.txt` (keep the CC-BY attribution when touching credits); the deploy pipeline copies the whole directory.
 
 ## Development
 
-There is no build step. Edit `index.html` directly and open it in a browser to test. The site consists of `index.html` and `404.html` (identical copies — after editing `index.html`, run `cp index.html 404.html`), the X11 app pages (`garden-clock.html`, `floppy.html`, `deerhunt.html`), and a `CNAME` file for the custom domain.
+The terminal lives in `src/` as ordered snippets (see `build.js` MANIFEST): `head.html` + `core.js` (IIFE open, filesystem, X11 windows, sl) + shell (`tokenize`/`expand`/`parse`/`exec`/`builtins`) + applets (`filesystem`/`text`/`awk`/`system & misc`) + `network.js`/`ssh.js`/`interactive.js`/`vi.js` + `foot.html`. The snippets are fragments of one single IIFE — concatenation preserves the closure, so keep them in manifest order and edit snippets (never the generated files). After editing, run `node build.js` to regenerate `index.html` and `404.html` (identical copies); `node build.js --verify` fails if the generated files have drifted (run by CI). The site also includes the X11 app pages (`garden-clock.html`, `floppy.html`, `floppyhunt.html`, `deerhunt.html`) and a `CNAME` file. Open a page in a browser to test.
 
 ## Deployment
 
-Push to `main` triggers GitHub Actions (`.github/workflows/pipeline.yaml`) which copies the HTML files and `CNAME` into `_site/` and deploys to GitHub Pages. No build tools are invoked — files are served as-is. New standalone pages must be added to the `cp` list in the workflow.
+Push to `main` triggers GitHub Actions (`.github/workflows/pipeline.yaml`) which runs `node build.js --verify`, copies the HTML files and `CNAME` into `_site/`, and deploys to GitHub Pages. No transpilation is invoked — files are served as-is. New standalone pages must be added to the `cp` list in the workflow.
 
 ## Architecture
 
@@ -29,4 +29,4 @@ When adding a new command, add an applet via `defineApplets` (or a builtin if it
 
 **Testing**: no framework in-repo, but the inline script is plain ES5-ish JS; it can be extracted (`sed -n '/^<script>$/,/^<\/script>$/p' index.html`) and run under Node with a small DOM stub to smoke-test shell behavior.
 
-**X11 apps**: entries in `/usr/bin` with `xapp: true` open a separate HTML page (`src`) inside a draggable Motif-style window in an iframe. Optional `winW`/`winH` set the default window size. `clock` → `garden-clock.html`, `floppy` → `floppy.html`, `deerhunt` → `deerhunt.html` (a stylized arcade 3D hunting game built on Babylon.js; time of day, season and weather follow the real clock).
+**X11 apps**: entries in `/usr/bin` with `xapp: true` open a separate HTML page (`src`) inside a draggable Motif-style window in an iframe. Optional `winW`/`winH` set the default window size. `clock` → `garden-clock.html`, `floppy` → `floppy.html`, `deerhunt` → `deerhunt.html` (a stylized arcade 3D hunting game built on Babylon.js; time of day, season and weather follow the real clock), `floppyhunt` → `floppyhunt.html` (a Duck Hunt clone on a 640×480 canvas — mouse-aimed, 2 shots per disk, PERFECT round bonus, moving-disk bonus round every 5th round, laughing dog; procedural disks/sky + CC0 sprites in `assets/floppyhunt/` for the dog and nature, WebAudio synth SFX).

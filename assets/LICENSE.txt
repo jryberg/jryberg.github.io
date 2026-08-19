@@ -43,3 +43,16 @@ Licensed CC-BY 3.0: https://creativecommons.org/licenses/by/3.0/
 
   bear.glb          https://poly.pizza/m/0PXWfxfb0Hu  "Bear" by Poly by Google
   squirrel.glb      https://poly.pizza/m/caxos24uWC9  "Squirrel" by Poly by Google
+
+2D sprites in floppyhunt/ (used by the Floppy Hunt X11 game)
+============================================================
+
+CC0 1.0 by Kenney (https://kenney.nl), public domain:
+  "Nature Kit" https://kenney.nl/assets/nature-kit
+    tree_oak, tree_detailed, tree_default, tree_pineRoundA, tree_cone
+    plant_bush, plant_bushLarge, plant_bushDetailed, plant_bushTriangle
+    flower_redA/B, flower_yellowA, flower_purpleA, grass_leafs
+
+CC0 1.0 by pzUH / Game Art 2D (https://opengameart.org/content/cat-dog-free-sprites)
+    dog_idle, dog_jump1-4, dog_run1-2 (from the "Cat & Dog - Free Sprites"
+    pack, https://www.gameart2d.com/free-dog-and-cat-sprites.html)
