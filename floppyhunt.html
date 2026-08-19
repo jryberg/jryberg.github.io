@@ -125,7 +125,7 @@ function sfx(name) {
 
 // ── Game state ───────────────────────────────────────────────────────────────
 var state = 'title';                 // title | roundIntro | playing | roundEnd | gameover
-var score = 0, lives = 3, round = 1;
+var score = 0, lives = 3, round = 1, ammo = 0;
 var highScore = 0;
 try { highScore = parseInt(localStorage.getItem('floppyhunt-best') || '0', 10) || 0; } catch (e) {}
 var crosshair = { x: W / 2, y: H / 2 };
@@ -273,6 +273,8 @@ function fleetDisk(d) {
 // ── Shooting ─────────────────────────────────────────────────────────────────
 function fire() {
   if (state !== 'playing') return;
+  if (ammo <= 0) return;   // empty trigger: no bullet to spend
+  ammo--;                  // every shot (hit or miss) costs one bullet
   ensureAudio();
   sfx('shot');
   effects.push({ kind: 'flash', t: 0, life: 90, x: BX, y: BY, r: 10 });
@@ -310,6 +312,13 @@ function fire() {
     }
     if (best) { best.shots--; if (best.shots <= 0) fleetDisk(best); }
   }
+  // out of ammo while disks are still live: the rest escape and the round resolves
+  if (ammo === 0 && (pending > 0 || activeCount > 0)) {
+    for (var d = disks.length - 1; d >= 0; d--) {
+      if (disks[d].mode === 'fly') fleetDisk(disks[d]);
+    }
+    pending = 0;
+  }
 }
 
 // ── Round state machine ──────────────────────────────────────────────────────
@@ -326,6 +335,7 @@ function startRound(n) {
   movingRound = spec.moving;
   pending = spec.total;
   concurrent = spec.concurrent;
+  ammo = spec.total * SHOTS_PER_DISK;   // hard ammo clip: 2 shots per disk
   activeCount = 0; hitsResolved = 0;
   disks = []; effects = [];
   spawnT = 1; introT = 1500;
@@ -747,6 +757,24 @@ function drawHUD() {
   for (var i = 0; i < lives; i++) {
     drawDiskSprite(22 + i * 34, H - 20, 0, '#23d3ff', 24, 0, false);
   }
+  // ammo clip (2 shots per disk) — bullet ticks, filled = available, dim = spent
+  var totAmmo = roundSpec(round).total * SHOTS_PER_DISK;
+  var spacing = 12;
+  var ax = W / 2 - (totAmmo - 1) * spacing / 2;
+  for (var a = 0; a < totAmmo; a++) {
+    var bx = ax + a * spacing;
+    if (a < ammo) {
+      ctx.fillStyle = '#8a5a18';
+      ctx.fillRect(bx, H - 46, 8, 12);
+      ctx.fillStyle = '#ffe31a';
+      ctx.fillRect(bx + 1, H - 45, 6, 10);
+      ctx.fillStyle = '#fff6c0';
+      ctx.fillRect(bx + 2, H - 44, 2, 4);
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      ctx.fillRect(bx, H - 46, 8, 12);
+    }
+  }
   // high score
   hudText('HI ' + highScore, W / 2, H - 20, 12, '#a8e8a0', 'center', true);
 }
@@ -1005,6 +1033,7 @@ if (typeof window !== 'undefined') {
       get score() { return score; },
       get lives() { return lives; },
       get round() { return round; },
+      get ammo() { return ammo; },
       get disks() { return disks.slice(); },
       get movingRound() { return movingRound; },
       fire: fire
