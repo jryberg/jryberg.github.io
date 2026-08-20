@@ -607,19 +607,22 @@ function addLem(x, y, dir) {
   return l;
 }
 
-function solidBelow(l, xOff) { return solidAt(Math.round(l.x + xOff), Math.ceil(l.y)); }
+// Ground/wall sampling uses a two-pixel pair like the reference (px+7,px+8):
+// a 1px slit never counts as "no ground" and never forms a wall.
+function groundAt(x, y) { return solidAt(x - 1, y) || solidAt(x, y); }
+function solidBelow(l, xOff) { return groundAt(Math.round(l.x + xOff), Math.ceil(l.y)); }
 function solidAhead(l) {
   var x = Math.floor(l.x + l.dir * 8);
   for (var yy = Math.floor(l.y) - 15; yy <= Math.floor(l.y) - 4; yy++) if (solidAt(x, yy)) return true;
   return false;
 }
 // columnGap(x, yTop, h): distance down to the first solid row, h+1 = none
-// (mirrors the reference collisionFloor sampling).
+// (mirrors the reference collisionFloor sampling, two-pixel pair).
 function columnGap(x, yTop, height) {
   for (var i = 0; i < height; i++) {
     var y = yTop + i;
     if (y < 0 || y >= worldH) continue;
-    if (solidAt(x, y)) return i + 1;
+    if (groundAt(x, y)) return i + 1;
   }
   return height + 1;
 }
@@ -663,7 +666,7 @@ function updateWalk(l) {
   l.x += l.dir;
   var cx = Math.round(l.x), fy = Math.floor(l.y);
   var rise = 0;
-  while (rise < 7 && solidAt(cx, fy - 1 - rise)) rise++;
+  while (rise < 7 && groundAt(cx, fy - 1 - rise)) rise++;
   if (rise >= 7) {   // wall
     if (l.skill === 0) { l.state = 'climb'; l.climbT = 0; l.stateT = 0; return; }
     l.x -= l.dir; l.dir = -l.dir;
@@ -769,23 +772,35 @@ function updateBlock(l) {
   l.stateT++;
 }
 
-// Builder: one 5x1 brick per full animation cycle, stepping +2/-1 onto it;
-// 12 bricks max; blocked ahead stops the job (the walker then turns).
+// Builder: one 5x1 brick per full animation cycle, stepping +2/-1 onto it.
+// It stops only when 12 bricks are laid or when the next brick's own row
+// already holds terrain (reference cannotBuildRight/Left - there is no
+// headroom check, so ramps merge seamlessly into platforms and can be
+// stacked across existing staircases). The last bricks clink as a warning,
+// then the "no more steps" shrug plays before walking on.
 function updateBuild(l) {
   l.stateT++;
   l.workT++;
   if (l.workT < 16) return;
   l.workT = 0;
-  if (l.buildN >= 12) { l.state = 'walk'; l.stateT = 0; return; }
-  var fy = Math.floor(l.y);
-  var ox = Math.round(l.x + l.dir * 5);
-  if (solidAt(ox, fy - 2) || solidAt(ox, fy - 9)) { l.state = 'walk'; l.stateT = 0; return; }
-  var bx = Math.floor(l.dir > 0 ? l.x : l.x - 4);
-  bricks.push({ x: bx, y: fy - 1, w: 5, h: 1 });
+  var fy = Math.floor(l.y), cx = Math.round(l.x);
+  // stop only when the next step's spot is buried in thick terrain (3
+  // contiguous rows) - a thin existing staircase doesn't stop the builder,
+  // so stairs can be stacked over stairs like in the original, and ramps
+  // merge flush into platform edges instead of stopping short
+  var ax = cx + l.dir * 3, buried = 0;
+  for (var j = 1; j <= 3; j++) if (solidAt(ax, fy - j)) buried++;
+  if (l.buildN >= 12 || buried >= 3) { l.state = 'nosteps'; l.stateT = 0; return; }
+  bricks.push({ x: l.dir > 0 ? cx : cx - 5, y: fy - 1, w: 5, h: 1 });
   l.x += l.dir * 2;
   l.y = fy - 1;
   l.buildN++;
-  sfx('build');
+  sfx(l.buildN >= 10 ? 'blip' : 'build');
+}
+
+function updateNoSteps(l) {
+  l.stateT++;
+  if (l.stateT >= 6) { l.state = 'walk'; l.stateT = 0; }
 }
 
 // Basher: swings on a 32-frame double cycle - carves a 7x9 block plus the
@@ -885,6 +900,7 @@ function updateLem(l) {
     case 'bomb': updateBomb(l); break;
     case 'block': updateBlock(l); break;
     case 'build': updateBuild(l); break;
+    case 'nosteps': updateNoSteps(l); break;
     case 'bash': updateBash(l); break;
     case 'mine': updateMine(l); break;
     case 'dig': updateDig(l); break;
@@ -979,6 +995,7 @@ function lemFrame(l) {
       return S.burning[Math.min(15, l.stateT - 16)];
     case 'block': return S.blocker[Math.floor(l.stateT) % 16];
     case 'build': return S.build[Math.floor(l.stateT) % 16];
+    case 'nosteps': return S.nosteps[Math.min(5, l.stateT)];
     case 'bash': return S.basher[Math.floor(l.stateT) % 32];
     case 'mine': return S.miner[Math.floor(l.stateT) % 24];
     case 'dig': return S.digger[Math.floor(l.stateT) % 8];
