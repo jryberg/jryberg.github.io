@@ -116,11 +116,12 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
       '/root': dirEntry([], { mode: 'drwx------' }),
       '/tmp': dirEntry([], { mode: 'drwxrwxrwt' }),
       '/usr': dirEntry(['bin', 'sbin']),
-      '/usr/bin': dirEntry(['clock', 'deerhunt', 'floppy', 'floppyhunt']),
+      '/usr/bin': dirEntry(['clock', 'deerhunt', 'floppy', 'floppyhunt', 'lemmings']),
       '/usr/bin/clock': { type: 'file', content: '', executable: true, xapp: true, src: 'garden-clock.html', windowTitle: 'The Garden Clock', owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
       '/usr/bin/deerhunt': { type: 'file', content: '', executable: true, xapp: true, src: 'deerhunt.html', windowTitle: 'Deer Hunt', winW: 1024, winH: 720, owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
       '/usr/bin/floppy': { type: 'file', content: '', executable: true, xapp: true, src: 'floppy.html', windowTitle: 'Floppy', owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
       '/usr/bin/floppyhunt': { type: 'file', content: '', executable: true, xapp: true, src: 'floppyhunt.html', windowTitle: 'Floppy Hunt', winW: 960, winH: 720, owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
+      '/usr/bin/lemmings': { type: 'file', content: '', executable: true, xapp: true, src: 'lemmings.html', windowTitle: 'Lemmings', winW: 640, winH: 480, owner: 'root', group: 'root', mode: '-rwxr-xr-x', mtime: BASE_MTIME },
       '/usr/sbin': dirEntry([]),
       '/var': dirEntry(['log']),
       '/var/log': dirEntry(['messages']),
@@ -484,7 +485,7 @@ html, body { height: 100%; background: #0a0a0a; color: #d4d4d4; font-family: 'Ca
     body.className = 'x11-body';
     var iframe = document.createElement('iframe');
     iframe.src = fileMeta.src;
-    iframe.allow = 'pointer-lock; fullscreen';
+    iframe.allow = 'pointer-lock; fullscreen; autoplay';
     body.appendChild(iframe);
 
     win.appendChild(titlebar);

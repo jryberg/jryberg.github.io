@@ -56,3 +56,32 @@ CC0 1.0 by Kenney (https://kenney.nl), public domain:
 CC0 1.0 by pzUH / Game Art 2D (https://opengameart.org/content/cat-dog-free-sprites)
     dog_idle, dog_jump1-4, dog_run1-2 (from the "Cat & Dog - Free Sprites"
     pack, https://www.gameart2d.com/free-dog-and-cat-sprites.html)
+
+2D assets in lemmings/ (used by the Lemmings X11 game)
+=======================================================
+
+MIT by Carlota Catot Bragós (https://github.com/carlotacb/Lemmings),
+Copyright (c) 2018 Carlota Catot Bragós, MIT license.
+  levels/<key>/map.png   terrain texture recreations of the iconic
+                         Fun/Tricky/Taxing maps from the original game
+  lemming_anim.png       lemming skill animation sheet
+  menu/                  logo.png, menuBackground.png, modeSpriteSheet.png,
+                         player1Sprite.png (main-menu art)
+  ui/                    work_names.png (skill name labels), nums.png,
+                         green_nums.png, lemm_font.png, reserved_words.png,
+                         cursor.png, buttons.png (skill/tool buttons),
+                         white_frame.png, black_frame.png, skull.png
+  doors/                 lemming_doors.png, lemming_trapdoors.png
+                         (exit door / entrance trapdoor animations)
+  results/               perfect.png, good.png, justInTick.png, disaster.png,
+                         buttons.png (post-level result screens)
+
+NOTE: sfx/ contains the original Lemmings sound-effect WAV rips
+(DMA Design) as distributed in the carlotacb/Lemmings repository;
+included at the site owner's request.
+
+NOTE: music/ contains seven original Lemmings music tracks
+(MenuSong, InstructionsSong, Lemming1, Lemming2, Lemming3, Lemming4,
+Lemming7 .ogg), also distributed in the carlotacb/Lemmings repository;
+included at the site owner's request.
+

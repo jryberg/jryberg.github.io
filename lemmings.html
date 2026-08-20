@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lemmings</title>
+<script src="assets/lemmings/lemmings-masks.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+#wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; cursor: none; outline: none; touch-action: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" tabindex="0"></canvas></div>
+<script>
+(function() {
+'use strict';
+
+// ── Lemmings ──────────────────────────────────────────────────────────────────
+// Faithful recreation of DMA Design's 1991 Lemmings. The world simulates at
+// the original 1x pixel scale on a 320x200 offscreen canvas and is blitted at
+// a crisp 2x onto a 640x480 screen; menus/briefing/results/HUD draw natively
+// at 640x480 using the original menu/UI art. Uses the open-source Lemmings
+// clone "carlotacb/Lemmings" (MIT) for level terrain (map recreations of the
+// iconic Fun/Tricky/Taxing maps), its lemming/skill sprite sheets and the
+// original UI sprite rips; sound effects and music are the original game's.
+// All at: assets/lemmings/
+
+var W = 640, H = 480, HUDH = 80;
+var VIEW_W = 320, VIEW_H = 200;   // world view in world px, drawn 2x -> 640x400
+var LEVEL_H = 160;                // playable world height (reference LEVEL_HEIGHT);
+                                  // the view is anchored so the world bottom meets
+                                  // the panel and the extra 40px of sky sits on top
+// The reference engine advances every lemming state machine once per
+// animation keyframe at 12 fps; one tick here = one of those frames, so all
+// speeds/cadences below map 1:1 to the reference jobs.
+var TICK_MS = 1000 / 12;
+var TICKS_PER_SEC = 1000 / TICK_MS;
+var FUSE_TICKS = 60;       // bomber countdown: 5 s (reference MAX_SEC)
+var FATAL_FALL = 65;       // reference FATAL_FALLING_DISTANCE
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+canvas.width = W; canvas.height = H;
+ctx.imageSmoothingEnabled = false;
+
+// offscreen 1x world surface; sim + world drawing stay in original pixels
+var worldCanvas = document.createElement('canvas');
+worldCanvas.width = VIEW_W; worldCanvas.height = VIEW_H;
+var wctx = worldCanvas.getContext('2d');
+wctx.imageSmoothingEnabled = false;
+
+function resize() {
+  var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+// ── Asset loading ─────────────────────────────────────────────────────────────
+// levels: map.png = terrain texture; solidity comes from the RLE masks in
+// lemmings-masks.js (LEMM_MASKS)
+// Level data verified against the reference project's Game/levels/*.txt and
+// info screens: names, save requirements (percent of lemmings), skill sets,
+// and door/trapdoor positions. tx/ty and dx/dy are the SPRITE TOP-LEFT
+// positions of the entrance trapdoor and exit door, as in the reference;
+// lemmings enter/escape at position + the sprite's enter/escape offset.
+var LEVEL_DEFS = [
+  { key: 'fun1',     name: 'Just dig!',                       lem: 10,  save: 1,  time: 300, release: 50, skills: [0,0,0,0,0,0,0,10],         tx: 200, ty: 35, dx: 337,  dy: 99,  door: 'standard' },
+  { key: 'fun2',     name: 'Only floaters can survive this',  lem: 10,  save: 1,  time: 300, release: 50, skills: [0,10,0,0,0,0,0,0],         tx: 86,  ty: 10, dx: 320,  dy: 117, door: 'egypt' },
+  { key: 'fun3',     name: 'Tailor-made for blockers',        lem: 50,  save: 5,  time: 300, release: 50, skills: [0,0,0,10,0,0,0,0],         tx: 135, ty: 2,  dx: 115,  dy: 121, door: 'egypt' },
+  { key: 'fun4',     name: 'Now use miners and climbers',     lem: 10,  save: 10, time: 300, release: 1,  skills: [10,0,0,0,0,0,1,0],         tx: 215, ty: 15, dx: 383,  dy: 16,  door: 'maya' },
+  { key: 'fun7',     name: 'Builders will help you here',     lem: 50,  save: 25, time: 300, release: 50, skills: [0,0,0,0,20,0,0,0],         tx: 220, ty: 75, dx: 775,  dy: 64,  door: 'maya' },
+  { key: 'taxing1',  name: "If at first you don't succeed..", lem: 100, save: 99, time: 240, release: 40, skills: [2,2,2,2,8,2,2,2],          tx: 40,  ty: 20, dx: 1130, dy: 31,  door: 'egypt' },
+  { key: 'tricky1',  name: 'This should be a doddle!',        lem: 100, save: 50, time: 240, release: 50, skills: [10,10,10,10,10,10,10,10],  tx: 90,  ty: 60, dx: 734,  dy: 84,  door: 'standard' },
+  { key: 'tricky2',  name: 'We all fall down',                lem: 40,  save: 16, time: 180, release: 1,  skills: [0,0,0,0,0,0,0,40],         tx: 340, ty: 15, dx: 925,  dy: 88,  door: 'hell' },
+  { key: 'tricky3',  name: 'A ladder would be handy',         lem: 100, save: 50, time: 360, release: 50, skills: [20,20,20,20,40,20,20,20],  tx: 140, ty: 2,  dx: 634,  dy: 19,  door: 'standard' }
+];
+
+var IMG = {};          // name -> loaded Image
+var pending = 0;
+
+function loadImage(src, name) {
+  pending++;
+  var img = new Image();
+  img.onload = function() { IMG[name] = img; pending--; if (pending === 0) onAllLoaded(); };
+  img.onerror = function() { pending--; if (pending === 0) onAllLoaded(); };
+  img.src = src;
+}
+
+function loadAssets() {
+  loadImage('assets/lemmings/lemming_anim.png', 'lemming');
+  LEVEL_DEFS.forEach(function(ld) {
+    loadImage('assets/lemmings/levels/' + ld.key + '/map.png', ld.key + '_map');
+  });
+  // original menu / UI / door art (carlotacb/Lemmings rips)
+  loadImage('assets/lemmings/menu/logo.png', 'logo');
+  loadImage('assets/lemmings/menu/menuBackground.png', 'menubg');
+  loadImage('assets/lemmings/menu/modeSpriteSheet.png', 'modesigns');
+  loadImage('assets/lemmings/menu/player1Sprite.png', 'player1');
+  loadImage('assets/lemmings/ui/cursor.png', 'cursor');
+  loadImage('assets/lemmings/ui/nums.png', 'nums');
+  loadImage('assets/lemmings/ui/green_nums.png', 'greennums');
+  loadImage('assets/lemmings/ui/lemm_font.png', 'font');
+  loadImage('assets/lemmings/ui/work_names.png', 'worknames');
+  loadImage('assets/lemmings/ui/reserved_words.png', 'infowords');
+  loadImage('assets/lemmings/ui/buttons.png', 'buttons');
+  loadImage('assets/lemmings/ui/white_frame.png', 'selframe');
+  loadImage('assets/lemmings/ui/skull.png', 'skull');
+  loadImage('assets/lemmings/doors/lemming_doors.png', 'doors');
+  loadImage('assets/lemmings/doors/lemming_trapdoors.png', 'trapdoors');
+  loadImage('assets/lemmings/results/perfect.png', 'res_perfect');
+  loadImage('assets/lemmings/results/good.png', 'res_good');
+  loadImage('assets/lemmings/results/justInTick.png', 'res_justInTick');
+  loadImage('assets/lemmings/results/disaster.png', 'res_disaster');
+  loadImage('assets/lemmings/results/buttons.png', 'resbuttons');
+}
+
+// ── Audio (original WAV rips) ─────────────────────────────────────────────────
+var actx = null, muted = false;
+var SFX = {};   // name -> ArrayBuffer (fetched)
+var DECODED = {}; // name -> AudioBuffer
+var audioReady = false;
+
+function ensureAudio() {
+  if (!actx) {
+    try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+  }
+  if (actx) decodeAll();   // cheap once decoded/in-flight; catches late-arriving buffers
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+
+var SND = {}; // event -> file basename (or '' for none)
+function mapSound(name) { return SND[name] || ''; }
+
+function loadSounds() {
+  var files = {
+    'build': 'THUNK', 'bash': 'SCRAPE', 'mine': 'CHAIN',
+    'dig': 'CHINK', 'boom': 'EXPLODE', 'splat': 'SPLAT', 'ohno': 'OHNO',
+    'yahoo': 'YIPPEE', 'win': 'LETSGO', 'lose': 'OHNO', 'blip': 'TING',
+    'assign': 'CHANGEOP', 'click': 'MOUSEPRE', 'door': 'DOOR', 'letsgo': 'LETSGO'
+  };
+  Object.keys(files).forEach(function(ev) {
+    var f = files[ev];
+    var src = 'assets/lemmings/sfx/' + f + '.WAV';
+    if (f === 'LETSGO') src = 'assets/lemmings/sfx/Letsgo.ogg';
+    var req = new XMLHttpRequest();
+    req.open('GET', src, true);
+    req.responseType = 'arraybuffer';
+    req.onload = function() {
+      if (req.status === 200 || req.status === 0) {
+        SFX[ev] = req.response;
+        if (actx) decodeTrack(ev);
+      }
+    };
+    req.send();
+  });
+}
+
+// Background music: original game tracks (assets/lemmings/music/)
+var MUSIC = {};            // name -> ArrayBuffer (fetched)
+var musicSrc = null, musicName = '';
+var musicDecodeFail = {};  // name -> true when the OGG could not be decoded
+
+// Fallback chiptune engine (used if the OGG decode is unavailable, e.g.
+// browsers without WebAudio OGG/Vorbis support).
+var synthOn = false, synthKind = '', synthTimer = null, synthNextT = 0, synthStep = 0;
+var SYNTH_STEP = 60 / 138 / 2;   // 138 BPM, 8th-note steps
+var NOTE_FREQ = { 'C3':130.81, 'D3':146.83, 'E3':164.81, 'F#3':185.0, 'G3':196.0, 'A3':220.0, 'B3':246.94,
+  'C4':261.63, 'C#4':277.18, 'D4':293.66, 'E4':329.63, 'F#4':369.99, 'G4':392.0, 'A4':440.0, 'B4':493.88,
+  'C5':523.25, 'C#5':554.37, 'D5':587.33, 'E5':659.25, 'F#5':739.99, 'G5':783.99, 'A5':880.0 };
+var SYNTH_BASS = ['D3','A2','B2','F#3','G3','D3','G3','A2'];
+var SYNTH_MELODY = [
+  'F#5','E5','D5','E5','F#5','A5','G5','F#5',
+  'C#5','D5','E5','C#5','A4','B4','C#5','E5',
+  'D5','C#5','B4','C#5','D5','F#5','E5','D5',
+  'A4','C#5','D5','A4','C#5','A4','B4','C#5',
+  'B4','D5','G5','D5','B4','D5','G5','D5',
+  'D5','F#5','A5','F#5','D5','E5','F#5','E5',
+  'G5','F#5','E5','D5','E5','F#5','G5','F#5',
+  'C#5','D5','E5','C#5','A4','B4','C#5','D5'
+];
+var SYNTH_MENU_MELODY = [
+  'D4','r','A4','r','F#4','r','A4','r',
+  'A3','r','E4','r','C#4','r','E4','r',
+  'B3','r','F#4','r','D4','r','F#4','r',
+  'C#4','r','A4','r','E4','r','C#4','r',
+  'G3','r','D4','r','B3','r','D4','r',
+  'D4','r','A4','r','F#4','r','A4','r',
+  'G3','r','D4','r','B3','r','D4','r',
+  'A3','r','E4','r','C#4','r','E4','r'
+];
+
+function synthNote(freq, when, dur, vol, type) {
+  if (!actx) return;
+  var o = actx.createOscillator(), g = actx.createGain();
+  o.type = type || 'square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, when);
+  g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+  o.connect(g); g.connect(actx.destination); o.start(when); o.stop(when + dur + 0.02);
+}
+
+function stopSynth() {
+  if (synthTimer) { clearInterval(synthTimer); synthTimer = null; }
+  synthOn = false;
+}
+
+function startSynth(kind) {
+  if (synthOn && synthKind === kind) return;
+  stopSynth();
+  synthOn = true; synthKind = kind;
+  synthStep = 0; synthNextT = actx.currentTime + 0.06;
+  synthTimer = setInterval(synthTick, 30);
+}
+
+function synthTick() {
+  if (!actx) return;
+  // kind is the track name; anything that isn't a level track gets the calmer menu melody
+  var melody = synthKind.indexOf('Lemming') === 0 ? SYNTH_MELODY : SYNTH_MENU_MELODY;
+  while (synthNextT < actx.currentTime + 0.25) {
+    var idx = synthStep % melody.length;
+    var bar = Math.floor(synthStep / 8) % SYNTH_BASS.length;
+    var note = melody[idx];
+    if (note && NOTE_FREQ[note]) synthNote(NOTE_FREQ[note], synthNextT, SYNTH_STEP * 0.9, 0.07, 'square');
+    if (synthStep % 2 === 0 && NOTE_FREQ[SYNTH_BASS[bar]]) synthNote(NOTE_FREQ[SYNTH_BASS[bar]], synthNextT, SYNTH_STEP * 1.8, 0.08, 'triangle');
+    synthNextT += SYNTH_STEP;
+    synthStep++;
+  }
+}
+
+// per-level rotation like the original game; menu and briefing have their own
+var LEVEL_TRACKS = ['Lemming1', 'Lemming2', 'Lemming3', 'Lemming4', 'Lemming7'];
+
+function loadMusic() {
+  ['MenuSong', 'InstructionsSong'].concat(LEVEL_TRACKS).forEach(function(name) {
+    var src = 'assets/lemmings/music/' + name + '.ogg';
+    function got(buf) {
+      MUSIC[name] = buf;
+      if (actx) decodeTrack('mus_' + name);
+    }
+    if (window.fetch) {
+      fetch(src).then(function(r) { return r.ok ? r.arrayBuffer() : null; })
+        .then(function(buf) { if (buf) got(buf); else console.warn('[lemmings] music not found:', src); })
+        .catch(function(e) { console.warn('[lemmings] music load failed:', src, e); });
+    } else {
+      var req = new XMLHttpRequest();
+      req.open('GET', src, true);
+      req.responseType = 'arraybuffer';
+      req.onload = function() {
+        if (req.status !== 200 && req.status !== 0) { console.warn('[lemmings] music load failed:', req.status, src); return; }
+        got(req.response);
+      };
+      req.send();
+    }
+  });
+}
+
+var DECODING = {};   // key -> true while a decodeAudioData is in flight
+
+function decodeTrack(key, onError) {
+  if (DECODED[key] || DECODING[key] || !actx) return;
+  var name = key.indexOf('mus_') === 0 ? key.substr(4) : null;
+  var raw = name ? MUSIC[name] : SFX[key];
+  if (!raw) return;
+  DECODING[key] = true;
+  actx.decodeAudioData(raw.slice(0), function(b) {
+    DECODED[key] = b; DECODING[key] = false;
+  }, function() {
+    DECODING[key] = false;
+    if (name) musicDecodeFail[name] = true;
+    if (onError) onError();
+  });
+}
+
+function playMusic(name) {
+  if (!actx || muted) { musicName = name; return; }
+  if (name === musicName && (musicSrc || synthOn)) return;
+  if (musicSrc) { try { musicSrc.stop(); } catch (e) {} musicSrc = null; }
+  stopSynth();
+  musicName = name;
+  if (!name) return;
+  if (musicDecodeFail[name]) { startSynth(name); return; }
+  var buf = DECODED['mus_' + name];
+  if (!buf) {
+    // not decoded yet; kick off a decode and let updateMusic() retry
+    decodeTrack('mus_' + name, function() { if (musicName === name) startSynth(name); });
+    return;
+  }
+  var s = actx.createBufferSource();
+  s.buffer = buf; s.loop = true;
+  var g = actx.createGain(); g.gain.value = 0.45;
+  s.connect(g); g.connect(actx.destination); s.start();
+  musicSrc = s;
+}
+
+function updateMusic() {
+  if (!actx) return;
+  if (muted) { if (musicSrc) { try { musicSrc.stop(); } catch (e) {} musicSrc = null; } musicName = ''; stopSynth(); return; }
+  var want = '';
+  if (mode === 'menu') want = 'MenuSong';
+  else if (mode === 'brief') want = 'InstructionsSong';
+  else if (mode === 'play' || mode === 'outro') want = LEVEL_TRACKS[progressionPos(curLevel) % LEVEL_TRACKS.length];
+  if (want === musicName && (musicSrc || synthOn)) return;
+  playMusic(want);
+}
+
+function decodeAll() {
+  Object.keys(SFX).forEach(function(ev) { decodeTrack(ev); });
+  Object.keys(MUSIC).forEach(function(name) { decodeTrack('mus_' + name); });
+}
+
+function playBuffer(buf, vol) {
+  if (!buf) return;
+  var s = actx.createBufferSource(); s.buffer = buf;
+  var g = actx.createGain(); g.gain.value = vol == null ? 1 : vol;
+  s.connect(g); g.connect(actx.destination); s.start();
+}
+
+function sfx(name, vol) {
+  if (muted || !actx) return;
+  if (DECODED[name]) { playBuffer(DECODED[name], vol); return; }
+  // fallback synth
+  switch (name) {
+    case 'build': tone(220, 0.06, 'square', 0.12, 300); break;
+    case 'bash': noise(0.08, 0.2, 2400); break;
+    case 'dig': noise(0.1, 0.2, 1600); break;
+    case 'boom': noise(0.4, 0.5, 500); tone(120, 0.4, 'sawtooth', 0.3, 40); break;
+    case 'splat': tone(300, 0.15, 'square', 0.22, 90); break;
+    case 'win': [392, 523, 659, 784, 1046].forEach(function(f, i) { tone(f, 0.16, 'square', 0.14, null, i * 0.08); }); break;
+  }
+}
+function tone(f, dur, type, vol, slide, when) {
+  if (muted || !actx) return;
+  var t = (when || 0) + actx.currentTime;
+  var o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+}
+function noise(dur, vol, freq) {
+  if (muted || !actx) return;
+  var t = actx.currentTime, n = Math.floor(actx.sampleRate * dur);
+  var buf = actx.createBuffer(1, n, actx.sampleRate), d = buf.getChannelData(0);
+  for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  var src = actx.createBufferSource(); src.buffer = buf;
+  var f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.8;
+  var g = actx.createGain(); g.gain.value = vol;
+  src.connect(f); f.connect(g); g.connect(actx.destination); src.start(t);
+}
+
+// ── Sprite sheet (16x16 cells) ────────────────────────────────────────────────
+// lemming_anim.png = 16 cols x 14 rows; rows per action extracted from the
+// source project's C++ keyframe tables.
+var sheet = null;
+var S = {};   // action -> array of cell canvases (right-facing)
+
+function sliceCell(row, col) {
+  var c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  var x = c.getContext('2d');
+  x.drawImage(sheet, col * 16, row * 16, 16, 16, 0, 0, 16, 16);
+  return c;
+}
+
+function buildSpriteTable() {
+  sheet = IMG['lemming'];
+  var i, arr;
+  arr = []; for (i = 0; i < 8; i++) arr.push(sliceCell(0, i)); S.walk = arr;
+  arr = []; for (i = 0; i < 7; i++) arr.push(sliceCell(1, i + 1)); S.escape = arr;
+  arr = []; for (i = 0; i < 4; i++) arr.push(sliceCell(2, i)); S.fall = arr;
+  arr = []; for (i = 0; i < 4; i++) arr.push(sliceCell(2, i + 4)); S.floatOpen = arr;
+  arr = []; for (i = 0; i < 4; i++) arr.push(sliceCell(2, i + 8)); S.floatFall = arr;
+  arr = []; for (i = 0; i < 16; i++) arr.push(sliceCell(3, i)); S.blocker = arr;
+  arr = []; for (i = 0; i < 8; i++) arr.push(sliceCell(4, i)); S.climb = arr;
+  arr = []; for (i = 0; i < 8; i++) arr.push(sliceCell(4, i + 8)); S.ledge = arr;
+  arr = []; for (i = 0; i < 16; i++) arr.push(sliceCell(5, i)); S.build = arr;
+  arr = []; for (i = 0; i < 6; i++) arr.push(sliceCell(0, i + 10)); S.nosteps = arr;
+  arr = []; for (i = 0; i < 32; i++) arr.push(sliceCell(6 + Math.floor(i / 16), i % 16)); S.basher = arr;
+  arr = []; for (i = 0; i < 8; i++) arr.push(sliceCell(8, i)); S.digger = arr;
+  arr = []; for (i = 0; i < 8; i++) arr.push(sliceCell(8, i + 8)); for (i = 0; i < 16; i++) arr.push(sliceCell(9, i)); S.miner = arr;
+  arr = []; for (i = 0; i < 16; i++) arr.push(sliceCell(10, i)); S.exploder = arr;
+  arr = []; for (i = 0; i < 16; i++) arr.push(sliceCell(11, i)); S.splat = arr;
+  arr = []; for (i = 0; i < 16; i++) arr.push(sliceCell(13, i)); S.burning = arr;
+}
+
+// ── Original UI art (cell geometry from the reference project's C++ sources) ──
+// lemm_font.png: 18x24 glyph cells at x=0, ASCII order from '!', 26px stride.
+var FONT_W = 18, FONT_H = 24, FONT_ADV = 20;
+
+function drawText(c, text, x, y, scale, filter) {
+  var img = IMG['font'];
+  if (!img) return;
+  var s = scale || 1;
+  text = String(text);
+  if (filter) { c.save(); c.filter = filter; }
+  for (var i = 0; i < text.length; i++) {
+    var code = text.charCodeAt(i);
+    if (code > 32 && code < 127) {
+      c.drawImage(img, 0, 26 * (code - 33), FONT_W, FONT_H,
+        Math.round(x + i * FONT_ADV * s), Math.round(y), Math.round(FONT_W * s), Math.round(FONT_H * s));
+    }
+  }
+  if (filter) c.restore();
+}
+function textWidth(text, scale) { return String(text).length * FONT_ADV * (scale || 1); }
+
+// green_nums.png: 38x81 cells on a 64x128 grid; digits 0-9 row-major, then
+// '-' and '%' on the third row (positions from GreenNumFactory).
+function greenGlyphRect(ch) {
+  if (ch >= '0' && ch <= '9') {
+    var d = ch.charCodeAt(0) - 48;
+    return [(d % 4) * 64, Math.floor(d / 4) * 128];
+  }
+  if (ch === '-') return [128, 256];
+  if (ch === '%') return [192, 256];
+  return null;
+}
+function drawGreenText(c, text, x, y, dw, dh) {
+  var img = IMG['greennums'];
+  if (!img) return;
+  text = String(text);
+  for (var i = 0; i < text.length; i++) {
+    var r = greenGlyphRect(text[i]);
+    if (r) c.drawImage(img, r[0], r[1], 38, 81, Math.round(x + i * (dw + 2)), Math.round(y), dw, dh);
+  }
+}
+
+// nums.png: tiny 3x8 digit cells on a 4x8 grid (for skill-button counts)
+function drawTinyNum(c, value, x, y, scale) {
+  var img = IMG['nums'];
+  if (!img) return;
+  var s = scale || 2, text = String(value);
+  for (var i = 0; i < text.length; i++) {
+    var d = text.charCodeAt(i) - 48;
+    if (d < 0 || d > 9) continue;
+    c.drawImage(img, (d % 4) * 4, Math.floor(d / 4) * 8, 3, 8, Math.round(x + i * 4 * s), Math.round(y), 3 * s, 8 * s);
+  }
+}
+
+// work_names.png: 297x81 word rows (WALKER MINER FLOATER FALLER DIGGER
+// CLIMBER BUILDER BLOCKER BASHER); indexed by our skill number, -1 = none
+var WORKNAME_ROW = [5, 2, -1, 7, 6, 8, 1, 4];   // climber floater bomber blocker builder basher miner digger
+
+function drawWorkName(c, skill, x, y) {
+  var img = IMG['worknames'];
+  var row = WORKNAME_ROW[skill];
+  if (row < 0 || !img) { drawText(c, SKILL_NAMES[skill], x, y, 0.75); return; }
+  c.drawImage(img, 0, row * 81, 297, 81, x, y, 74, 20);
+}
+
+// reserved_words.png: 168x81 cells - IN (0,0), OUT (256,0), TIME (0,128)
+var INFOWORD = { IN: [0, 0], OUT: [256, 0], TIME: [0, 128] };
+function drawInfoWord(c, word, x, y) {
+  var img = IMG['infowords'];
+  if (!img) return;
+  var r = INFOWORD[word];
+  c.drawImage(img, r[0], r[1], 168, 81, x, y, 40, 20);
+}
+
+// buttons.png: 15x23 cells on a 16x32 grid (positions from ButtonFactory)
+var BTN_CELL = {
+  minus: [0, 0], plus: [16, 0], pause: [32, 0], nuke: [48, 0], exploder: [64, 0],
+  blocker: [80, 0], speed: [96, 0], basher: [0, 32], builder: [16, 32],
+  climber: [32, 32], digger: [48, 32], floater: [64, 32], miner: [80, 32]
+};
+function drawButtonIcon(c, name, x, y) {
+  var img = IMG['buttons'];
+  if (!img) return;
+  var r = BTN_CELL[name];
+  c.drawImage(img, r[0], r[1], 15, 23, x, y, 30, 46);
+}
+
+// lemming_doors.png: 40x32 frames. The standard door animates over the
+// 3x2 grid at the top; the egypt/maya/hell doors each animate down one
+// column (rows 2-7), as in the reference Door* classes.
+// The reference escape point is doorPos + (13,16) compared against the
+// lemming SPRITE TOP-LEFT; our lemmings track (center x, feet y), so the
+// equivalent point is doorPos + (21,32) - the center of the arch at its
+// base. Same conversion for the trapdoor enter point (13,0) -> (21,16).
+var DOOR_COL = { egypt: 0, maya: 40, hell: 80 };
+var DOOR_ESC_X = 21, DOOR_ESC_Y = 32;
+var TRAP_ENTER_X = 21, TRAP_ENTER_Y = 16;
+
+// ── Terrain ────────────────────────────────────────────────────────────────────
+var solid = null, bricks = [], worldW = 0, worldH = 0;
+var terrainCanvas = null, tctx = null;
+var camX = 0, camY = 0;
+var doorX = 0, doorY = 0, trapX = 0, trapY = 0;
+
+function solidAt(x, y) {
+  if (y >= worldH) return true;
+  if (x < 0 || x >= worldW || y < 0) return false;
+  if (solid[y * worldW + x]) return true;
+  for (var i = 0; i < bricks.length; i++) {
+    var b = bricks[i];
+    if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) return true;
+  }
+  return false;
+}
+
+function clearAt(x, y) {
+  if (x < 0 || x >= worldW || y < 0 || y >= worldH) return;
+  solid[y * worldW + x] = 0;
+  tctx.clearRect(x, y, 1, 1);
+}
+
+function carveCircle(cx, cy, r) {
+  for (var y = cy - r; y <= cy + r; y++) for (var x = cx - r; x <= cx + r; x++) {
+    var nx = x - cx, ny = y - cy;
+    if (nx * nx + ny * ny <= r * r) clearAt(x, y);
+  }
+}
+
+function buildTerrain(ld) {
+  var md = LEMM_MASKS[ld.key];
+  var map = IMG[ld.key + '_map'];
+  worldW = md.w; worldH = md.h;
+  solid = new Uint8Array(worldW * worldH);
+  var idx = 0;
+  for (var y = 0; y < worldH; y++) {
+    var runs = md.r[y], val = 0;
+    for (var r = 0; r < runs.length; r++) {
+      for (var i = 0; i < runs[r]; i++) { if (val) solid[idx] = 1; idx++; }
+      val = 1 - val;
+    }
+  }
+  // alpha mask canvas built from the same solid data
+  var ac = document.createElement('canvas'); ac.width = worldW; ac.height = worldH;
+  var ax = ac.getContext('2d');
+  var aid = ax.createImageData(worldW, worldH);
+  for (var i = 0; i < worldW * worldH; i++) if (solid[i]) aid.data[i * 4 + 3] = 255;
+  ax.putImageData(aid, 0, 0);
+  // composite terrain texture with mask as alpha
+  terrainCanvas = document.createElement('canvas');
+  terrainCanvas.width = worldW; terrainCanvas.height = worldH;
+  tctx = terrainCanvas.getContext('2d');
+  tctx.drawImage(map, 0, 0);
+  tctx.globalCompositeOperation = 'destination-in';
+  tctx.drawImage(ac, 0, 0);
+  tctx.globalCompositeOperation = 'source-over';
+  // door/trapdoor coordinates are in map pixel space (matching the
+  // reference level files), used directly
+  trapX = ld.tx;
+  trapY = ld.ty;
+  doorX = ld.dx;
+  doorY = ld.dy;
+  // start with the trapdoor in view; no vertical scrolling - the camera shows
+  // the full 160px-tall world with 40px of sky above it, like the reference
+  camX = clamp(trapX + TRAP_ENTER_X - Math.floor(VIEW_W / 2), 0, Math.max(0, worldW - VIEW_W));
+  camY = LEVEL_H - VIEW_H;
+}
+
+// ── Levels ────────────────────────────────────────────────────────────────────
+// Play order mirrors the reference game: Fun 1-4, Fun 7, Tricky 1-3, Taxing 1.
+// DISPLAY_ORDER maps progression position -> LEVEL_DEFS index; `unlocked`
+// counts unlocked progression positions.
+var DISPLAY_ORDER = [0, 1, 2, 3, 4, 6, 7, 8, 5];
+function progressionPos(idx) { return DISPLAY_ORDER.indexOf(idx); }
+
+var curLevel = 0, unlocked = 1;
+try {
+  var storedV2 = localStorage.getItem('lemmings-unlocked-v2');
+  if (storedV2 !== null) {
+    unlocked = parseInt(storedV2, 10) || 1;
+  } else {
+    // older builds stored a raw LEVEL_DEFS index bound under 'lemmings-unlocked';
+    // convert to a progression-position count without losing progress
+    var oldUnlocked = parseInt(localStorage.getItem('lemmings-unlocked') || '1', 10) || 1;
+    unlocked = DISPLAY_ORDER.filter(function(idx) { return idx < oldUnlocked; }).length;
+  }
+} catch (e) {}
+unlocked = Math.min(Math.max(unlocked, 1), LEVEL_DEFS.length);
+
+function saveUnlocked() {
+  try { localStorage.setItem('lemmings-unlocked-v2', String(unlocked)); } catch (e) {}
+}
+
+// ── Game state ────────────────────────────────────────────────────────────────
+var mode = 'loading';     // loading | menu | brief | play | outro | result
+var lems = [], pops = [], debris = [];
+var released = 0, spawnT = 0, saved = 0, gameT = 0, paused = false, fast = 1;
+var rate = 50, selSkill = 0, selLem = -1;
+var outroT = 0, resultKind = '', resultWon = false, resultSel = 0;
+var trapAnimT = 0;        // trapdoor opening animation (ticks since level start)
+var TRAP_OPEN_TICKS = 10; // 10 frames at 12 fps, like the reference trapdoor
+var mouseX = W / 2, mouseY = H / 2;
+var skillsLeft = [];
+var menuSel = 0;   // highlighted progression position in the menu
+var menuAnimStart = 0;   // for menu walking lemmings (rAF-driven, no sim tick)
+
+var SKILL_NAMES = ['Climber', 'Floater', 'Bomber', 'Blocker', 'Builder', 'Basher', 'Miner', 'Digger'];
+
+// ── Entities ──────────────────────────────────────────────────────────────────
+function addLem(x, y, dir) {
+  var l = {
+    x: x, y: y, px: x, py: y, dir: dir, state: 'fall', stateT: 0,
+    skill: -1, skillT: 0, fuseT: 0, vy: 0,
+    fallFrom: y, climbT: 0, buildN: 0, workT: 0,
+    dead: false, saved: false, num: released, anim: 0
+  };
+  lems.push(l);
+  released++;
+  return l;
+}
+
+function solidBelow(l, xOff) { return solidAt(Math.round(l.x + xOff), Math.ceil(l.y)); }
+function solidAhead(l) {
+  var x = Math.floor(l.x + l.dir * 8);
+  for (var yy = Math.floor(l.y) - 15; yy <= Math.floor(l.y) - 4; yy++) if (solidAt(x, yy)) return true;
+  return false;
+}
+// columnGap(x, yTop, h): distance down to the first solid row, h+1 = none
+// (mirrors the reference collisionFloor sampling).
+function columnGap(x, yTop, height) {
+  for (var i = 0; i < height; i++) {
+    var y = yTop + i;
+    if (y < 0 || y >= worldH) continue;
+    if (solidAt(x, y)) return i + 1;
+  }
+  return height + 1;
+}
+
+function applySkill(l, s) {
+  if (l.dead || l.saved || l.state === 'escape') return;
+  if (skillsLeft[s] <= 0) return;
+  // work skills need ground under the feet - airborne lemmings only accept
+  // climber/floater/bomber, like the original
+  if (s >= 3 && (l.state === 'fall' || l.state === 'climb' || l.state === 'ledge')) return;
+  if (l.state === 'block' && s !== 2) return;   // a blocker can only be bombed free
+  skillsLeft[s]--;
+  l.skill = s; l.skillT = 0; l.workT = 0; l.buildN = 0;
+  switch (s) {
+    case 0: break;   // climber: starts climbing when it next walks into a wall
+    case 1: if (l.state === 'fall') l.stateT = 0; break;   // floater: chute deploys in the fall
+    case 2: l.fuseT = FUSE_TICKS; break;   // bomber: 5s countdown, keeps working meanwhile
+    case 3: l.state = 'block'; l.stateT = 0; break;
+    case 4: l.state = 'build'; l.stateT = 0; break;
+    case 5: l.state = 'bash'; l.stateT = 0; break;
+    case 6: l.state = 'mine'; l.stateT = 0; break;
+    case 7: l.state = 'dig'; l.stateT = 0; break;
+  }
+  sfx('assign');
+}
+
+function killLem(l) { l.dead = true; }
+function splat(l) { killLem(l); l.state = 'splat'; l.stateT = 0; sfx('splat'); }
+
+// ── physics + skills ─────────────────────────────────────────────────────────
+// Each function mirrors the matching reference Job state machine, translated
+// to our coordinates (l.x = sprite center, l.y = feet row = ref pos + (8,16)).
+// One tick = one reference animation frame (12 fps).
+
+// Walker: rise 2, settle down up to 3 -> climbs <=2, descends <=1 net;
+// deeper drops become falls, feet-row contact ahead is a wall.
+function updateWalk(l) {
+  l.x += l.dir;
+  l.y -= 2;
+  var cx = Math.round(l.x), fy = Math.floor(l.y);
+  if (solidAt(cx, fy - 1)) {   // wall at the feet row
+    l.x -= l.dir; l.y += 2;
+    if (l.skill === 0) { l.state = 'climb'; l.climbT = 0; l.stateT = 0; return; }
+    l.dir = -l.dir;
+    return;
+  }
+  var down = columnGap(cx, fy, 4) - 1;   // rows down to ground (0..3), 4 = none
+  if (down >= 4) {
+    l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0;
+    return;
+  }
+  l.y = fy + down;
+  // blockers turn walkers around (reference blocking field is ~10px wide)
+  for (var i = 0; i < lems.length; i++) {
+    var b = lems[i];
+    if (b === l || b.dead || b.state !== 'block') continue;
+    if (Math.abs(b.x - l.x) < 7 && Math.abs(b.y - l.y) < 16) { l.dir = -l.dir; return; }
+  }
+  // the exit: only walking lemmings escape, at the base of the arch
+  if (Math.abs(l.x - (doorX + DOOR_ESC_X)) <= 2 && Math.abs(l.y - (doorY + DOOR_ESC_Y)) <= 2) {
+    l.state = 'escape'; l.stateT = 0; sfx('yahoo');
+    return;
+  }
+  l.stateT++;
+}
+
+// Faller: constant 2 px/tick; a fall of 65+ px is fatal. Floaters freefall
+// for 4 ticks, hang while the chute opens (4 ticks), then sail gently down;
+// with the chute deployed the fall is never fatal.
+function doFall(l) {
+  l.stateT++;
+  var isFloat = l.skill === 1;
+  var vy = 2;
+  if (isFloat && l.stateT > 4) vy = l.stateT <= 8 ? 0 : 1;
+  // descend one pixel at a time: no tunnelling through thin ledges/bridges
+  for (var i = 0; i < vy; i++) {
+    l.y += 1;
+    if (l.y > LEVEL_H + 8) { killLem(l); return; }   // fell out of the map
+    if (solidBelow(l, 0)) {
+      var fell = l.y - l.fallFrom;
+      l.y = Math.floor(l.y);
+      if (isFloat && l.stateT > 4) l.skill = -1;   // chute consumed by a real fall
+      if (fell >= FATAL_FALL && !isFloat) { splat(l); return; }
+      l.state = 'walk'; l.stateT = 0;
+      return;
+    }
+  }
+}
+
+// Climber: 1 px/tick up the wall; an overhang pushes it off (falls back
+// down); at the top it pulls up over the edge and walks on - same direction.
+function updateClimb(l) {
+  l.stateT++;
+  l.y -= 1; l.climbT++;
+  if (solidAt(Math.round(l.x), Math.floor(l.y) - 16)) {
+    l.x -= l.dir * 2;
+    l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0;
+    return;
+  }
+  if (!solidAhead(l)) { l.state = 'ledge'; l.stateT = 0; }
+}
+
+function updateLedge(l) {
+  l.stateT++;
+  if (l.stateT >= 4) {
+    l.x += l.dir * 3; l.y -= 3;
+    l.state = 'walk'; l.stateT = 0;
+  }
+}
+
+function updateEscape(l) {
+  l.stateT++;
+  if (l.stateT >= 7) { l.saved = true; saved++; }
+}
+
+// Bomber: after the countdown, "oh no!" (16 frames) then burning (16 frames)
+// then the blast. The reference explosion doesn't hurt other lemmings.
+function updateBomb(l) {
+  l.stateT++;
+  if (l.stateT >= 32) explode(l);
+}
+
+function explode(l) {
+  var cx = Math.round(l.x), cy = Math.floor(l.y) - 8;
+  carveCircle(cx, cy, 9);
+  pops.push({ x: cx, y: cy, t: 0 });
+  // pixel debris burst (green hair / blue suit / skin tones)
+  var DEBRIS_COLORS = ['#00b000', '#4040e0', '#f0c8a0', '#e8e8e8'];
+  for (var d = 0; d < 14; d++) {
+    var ang = d / 14 * 6.283, sp = 1.2 + (d % 3) * 0.9;
+    debris.push({ x: cx, y: cy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1.5,
+      t: 0, color: DEBRIS_COLORS[d % 4] });
+  }
+  sfx('boom');
+  killLem(l);
+}
+
+function updateBlock(l) {
+  if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; return; }
+  l.stateT++;
+}
+
+// Builder: one 5x1 brick per full animation cycle, stepping +2/-1 onto it;
+// 12 bricks max; blocked ahead stops the job (the walker then turns).
+function updateBuild(l) {
+  l.stateT++;
+  l.workT++;
+  if (l.workT < 16) return;
+  l.workT = 0;
+  if (l.buildN >= 12) { l.state = 'walk'; l.stateT = 0; return; }
+  var fy = Math.floor(l.y);
+  var ox = Math.round(l.x + l.dir * 5);
+  if (solidAt(ox, fy - 2) || solidAt(ox, fy - 9)) { l.state = 'walk'; l.stateT = 0; return; }
+  var bx = Math.floor(l.dir > 0 ? l.x : l.x - 4);
+  bricks.push({ x: bx, y: fy - 1, w: 5, h: 1 });
+  l.x += l.dir * 2;
+  l.y = fy - 1;
+  l.buildN++;
+  sfx('build');
+}
+
+// Basher: swings on a 32-frame double cycle - carves a 7x9 block plus the
+// leading column early in each swing, advances 1 px/tick outside the swings.
+function updateBash(l) {
+  var frame = l.stateT % 32;
+  l.stateT++;
+  var fy = Math.floor(l.y), cx = Math.round(l.x);
+  if (frame === 2 || frame === 18) {
+    var any = false;
+    for (var i = 0; i <= 7 && !any; i++) {
+      for (var j = 1; j <= 9; j++) {
+        if (solidAt(cx + l.dir * i, fy - j)) { any = true; break; }
+      }
+    }
+    if (!any) { l.state = 'walk'; l.stateT = 0; return; }
+    for (i = 0; i <= 6; i++) for (j = 1; j <= 9; j++) clearAt(cx + l.dir * i, fy - j);
+    for (j = 2; j <= 8; j++) clearAt(cx + l.dir * 7, fy - j);
+    sfx('bash');
+  }
+  if (frame % 16 < 7) l.x += l.dir;
+  if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+}
+
+// Miner: one pick swing per 24-frame cycle - carves the slanted slice from
+// the reference mineRight/mineLeft, then steps +2 along and +1 down.
+function updateMine(l) {
+  var frame = l.stateT % 24;
+  l.stateT++;
+  var fy = Math.floor(l.y);
+  if (frame === 2) {
+    var bx = Math.round(l.x) + l.dir * 2;
+    var any = false;
+    for (var i = 0; i < 6 && !any; i++) {
+      for (var j = 0; j <= 12; j++) {
+        if (solidAt(bx + l.dir * i, fy - j)) { any = true; break; }
+      }
+    }
+    if (!any) { l.state = 'walk'; l.stateT = 0; return; }
+    for (i = 0; i < 4; i++) {
+      var x = bx + l.dir * i;
+      clearAt(x, fy);
+      clearAt(x, fy - (i + 1)); clearAt(x, fy - (i + 2));
+      clearAt(x, fy - 10); clearAt(x, fy - 11); clearAt(x, fy - 12);
+    }
+    for (var j2 = 0; j2 < 12; j2++) clearAt(bx + l.dir * 4, fy - j2);
+    for (j2 = 2; j2 < 11; j2++) clearAt(bx + l.dir * 5, fy - j2);
+    sfx('mine');
+  }
+  if (frame === 17) {
+    l.x += l.dir * 2; l.y += 1;
+    if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+  }
+}
+
+// Digger: two spade strokes per 8-frame cycle, each clearing a 9px row and
+// sinking 1px; stops when the 9x3 test area beneath holds no terrain.
+function updateDig(l) {
+  var frame = l.stateT % 8;
+  l.stateT++;
+  if (frame !== 0 && frame !== 4) return;
+  var fy = Math.floor(l.y), cx = Math.round(l.x);
+  var any = false;
+  for (var i = -4; i <= 4 && !any; i++) {
+    for (var j = 0; j < 3; j++) {
+      if (solidAt(cx + i, fy + j)) { any = true; break; }
+    }
+  }
+  if (!any) {
+    if (solidBelow(l, 0)) { l.state = 'walk'; l.stateT = 0; }
+    else { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+    return;
+  }
+  for (i = -4; i <= 4; i++) clearAt(cx + i, fy);
+  l.y += 1;
+  sfx('dig');
+  if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+}
+
+function updateLem(l) {
+  // splatted lemmings are already dead but still play the squish animation
+  // for a moment before being removed by the tick filter
+  if (l.state === 'splat') { l.stateT++; return; }
+  if (l.dead) return;
+  if (l.saved) return;
+  if (l.state === 'escape') { updateEscape(l); return; }
+  // the bomber countdown runs alongside whatever the lemming is doing
+  if (l.skill === 2 && l.state !== 'bomb') {
+    l.fuseT--;
+    if (l.fuseT <= 0) { l.state = 'bomb'; l.stateT = 0; sfx('ohno'); return; }
+  }
+  switch (l.state) {
+    case 'walk': updateWalk(l); break;
+    case 'fall': doFall(l); break;
+    case 'climb': updateClimb(l); break;
+    case 'ledge': updateLedge(l); break;
+    case 'bomb': updateBomb(l); break;
+    case 'block': updateBlock(l); break;
+    case 'build': updateBuild(l); break;
+    case 'bash': updateBash(l); break;
+    case 'mine': updateMine(l); break;
+    case 'dig': updateDig(l); break;
+    default: doFall(l);
+  }
+}
+
+function levelSave() { return LEVEL_DEFS[curLevel].save; }
+
+function updateSpawn() {
+  if (trapAnimT < TRAP_OPEN_TICKS) return;   // hatch still opening
+  // reference spawn pacing: 3500ms * (100-rate)/50 between lemmings
+  var interval = Math.max(1, Math.round((100 - rate) * 0.84));
+  spawnT++;
+  if (released < LEVEL_DEFS[curLevel].lem && spawnT >= interval) {
+    spawnT = 0;
+    addLem(trapX + TRAP_ENTER_X, trapY + TRAP_ENTER_Y, 1);
+  }
+}
+
+// The level runs until every lemming is accounted for (or time runs out) -
+// reaching the save target early does not end it, like the original.
+function endLevel() {
+  if (mode !== 'play') return;
+  resultWon = saved >= levelSave();
+  mode = 'outro';
+  outroT = lems.length ? 50 : 20;
+  sfx(resultWon ? 'win' : 'lose');
+}
+
+function finishLevel() {
+  var total = LEVEL_DEFS[curLevel].lem;
+  if (saved >= total) resultKind = 'perfect';
+  else if (saved > levelSave()) resultKind = 'good';
+  else if (saved === levelSave()) resultKind = 'justInTick';
+  else resultKind = 'disaster';
+  resultWon = saved >= levelSave();
+  resultSel = resultWon ? 1 : 0;   // Continue when won, Retry when lost
+  if (resultWon) {
+    var next = Math.min(progressionPos(curLevel) + 2, DISPLAY_ORDER.length);
+    if (next > unlocked) { unlocked = next; saveUnlocked(); }
+  }
+  mode = 'result';
+}
+
+function tick() {
+  gameT++;
+  if (trapAnimT < TRAP_OPEN_TICKS) {
+    trapAnimT++;
+    if (trapAnimT === 2) sfx('door');
+  }
+  if (mode === 'play' && gameT >= LEVEL_DEFS[curLevel].time * TICKS_PER_SEC) { endLevel(); }
+  if (mode === 'play') updateSpawn();
+  for (var i = 0; i < lems.length; i++) {
+    // snapshot for render-time interpolation between sim ticks
+    lems[i].px = lems[i].x; lems[i].py = lems[i].y;
+    updateLem(lems[i]);
+  }
+  lems = lems.filter(function(l) {
+    if (l.saved) return false;                     // walked into the exit: gone
+    if (!l.dead) return true;
+    return l.state === 'splat' && l.stateT <= 16;  // squish animation, then gone
+  });
+  if (mode === 'play') {
+    if (released >= LEVEL_DEFS[curLevel].lem && lems.length === 0) endLevel();
+  } else if (mode === 'outro') {
+    outroT--;
+    if (outroT <= 0) finishLevel();
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+function animIdx(l, arr) {
+  return arr[Math.floor(l.stateT) % arr.length];
+}
+
+function lemFrame(l) {
+  switch (l.state) {
+    case 'walk':
+      return animIdx(l, S.walk);
+    case 'fall':
+      if (l.skill === 1) {
+        if (l.stateT <= 4) return S.fall[l.stateT % 4];                   // freefall
+        if (l.stateT <= 8) return S.floatOpen[(l.stateT - 5) % 4];        // chute opening
+        return S.floatFall[(l.stateT - 9) % S.floatFall.length];          // sailing down
+      }
+      return S.fall[Math.floor(l.stateT) % 4];
+    case 'climb': return animIdx(l, S.climb);
+    case 'ledge': return S.ledge[Math.min(7, l.stateT * 2)];
+    case 'bomb':
+      if (l.stateT < 16) return S.exploder[l.stateT];                     // oh no!
+      return S.burning[Math.min(15, l.stateT - 16)];
+    case 'block': return S.blocker[Math.floor(l.stateT) % 16];
+    case 'build': return S.build[Math.floor(l.stateT) % 16];
+    case 'bash': return S.basher[Math.floor(l.stateT) % 32];
+    case 'mine': return S.miner[Math.floor(l.stateT) % 24];
+    case 'dig': return S.digger[Math.floor(l.stateT) % 8];
+    case 'escape': return S.escape[Math.min(6, l.stateT)];
+    case 'splat': return S.splat[Math.min(15, l.stateT)];
+    default: return S.walk[0];
+  }
+}
+
+// Lemmings draw on the native 640x480 layer at 2x, interpolated between sim
+// ticks so movement is smooth at display refresh rate (walkers glide,
+// floaters sail down) while the sim stays on its fixed 12 Hz grid.
+var renderAlpha = 1;
+
+function drawLem(l) {
+  var cell = lemFrame(l);
+  var lx = l.px + (l.x - l.px) * renderAlpha;
+  var ly = l.py + (l.y - l.py) * renderAlpha;
+  var sx = Math.round((lx - camX) * 2) - 16, sy = Math.round((ly - camY) * 2) - 32;
+  ctx.save();
+  if (l.num === selLem) { ctx.shadowColor = 'rgba(255,255,255,0.8)'; ctx.shadowBlur = 6; }
+  if (l.state === 'block') ctx.shadowColor = 'rgba(255,90,90,0.9)';
+  if (l.skill === 2 && l.state !== 'bomb' && l.fuseT % 8 < 4) ctx.filter = 'brightness(1.4)';
+  if (l.dir >= 0) {
+    ctx.drawImage(cell, 0, 0, 16, 16, sx, sy, 32, 32);
+  } else {
+    ctx.translate(sx + 32, sy); ctx.scale(-1, 1);
+    ctx.drawImage(cell, 0, 0, 16, 16, 0, 0, 32, 32);
+  }
+  ctx.restore();
+  // bomber countdown digit above the head
+  if (l.skill === 2 && l.state !== 'bomb' && l.fuseT > 0) {
+    drawTinyNum(ctx, Math.min(5, Math.ceil(l.fuseT / TICKS_PER_SEC)), Math.round((lx - camX) * 2) - 3, sy - 17, 2);
+  }
+  // fading skull ghost where a lemming splatted
+  if (l.state === 'splat' && IMG['skull']) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - l.stateT / 16) * 0.8;
+    ctx.drawImage(IMG['skull'], 0, 0, 140, 170, Math.round((lx - camX) * 2) - 8, sy - 10 - l.stateT, 16, 20);
+    ctx.restore();
+  }
+  // selector arrow above
+  if (l.num === selLem && ((gameT >> 3) & 1)) {
+    var ax = Math.round((lx - camX) * 2), ay = sy - 10;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.moveTo(ax - 8, ay); ctx.lineTo(ax + 8, ay); ctx.lineTo(ax, ay + 10); ctx.fill();
+  }
+}
+
+function drawTerrain() {
+  wctx.drawImage(terrainCanvas, Math.round(-camX), Math.round(-camY));
+}
+
+function drawBricks() {
+  for (var i = 0; i < bricks.length; i++) {
+    var b = bricks[i], x = b.x - camX, y = b.y - camY;
+    wctx.fillStyle = '#e0c088'; wctx.fillRect(x, y, b.w, 1);
+    wctx.fillStyle = '#8f6a38'; wctx.fillRect(x, y + 1, b.w, b.h - 1);
+  }
+}
+
+function drawDoor() {
+  var img = IMG['doors'];
+  var type = LEVEL_DEFS[curLevel].door;
+  var x = Math.round(doorX - camX), y = Math.round(doorY - camY);
+  if (img) {
+    var f = Math.floor(gameT) % 6;
+    if (type === 'standard') wctx.drawImage(img, (f % 3) * 40, Math.floor(f / 3) * 32, 40, 32, x, y, 40, 32);
+    else wctx.drawImage(img, DOOR_COL[type], (f + 2) * 32, 40, 32, x, y, 40, 32);
+  } else {
+    wctx.fillStyle = '#c8a850'; wctx.fillRect(x + 4, y + 8, 32, 24);
+  }
+  // glow when goal met
+  if ((mode === 'outro' && resultWon) || (saved >= levelSave() && gameT % 30 < 15)) {
+    wctx.fillStyle = 'rgba(255,240,180,0.3)';
+    wctx.fillRect(x + 8, y + 14, 24, 16);
+  }
+}
+
+function drawTrapdoor() {
+  var img = IMG['trapdoors'];
+  var x = Math.round(trapX - camX), y = Math.round(trapY - camY);
+  if (img) {
+    var f = Math.min(9, Math.floor(trapAnimT * 10 / TRAP_OPEN_TICKS));
+    wctx.drawImage(img, 0, f * 25, 41, 25, x, y, 41, 25);
+  } else {
+    wctx.fillStyle = '#6a4a22'; wctx.fillRect(x + 10, y, 20, 3);
+  }
+}
+
+// Dark banded sky (the original's play area fades to black space) + dim stars
+var skyCanvas = null;
+function buildSky() {
+  skyCanvas = document.createElement('canvas');
+  skyCanvas.width = VIEW_W; skyCanvas.height = VIEW_H;
+  var c = skyCanvas.getContext('2d');
+  var bands = 16, bh = Math.ceil(VIEW_H / bands);
+  for (var i = 0; i < bands; i++) {
+    var t = i / (bands - 1);
+    var r = Math.round(2 + 22 * t), g = Math.round(3 + 28 * t), b = Math.round(12 + 58 * t);
+    c.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    c.fillRect(0, i * bh, VIEW_W, bh);
+  }
+  // sparse fixed stars (deterministic layout)
+  for (i = 0; i < 40; i++) {
+    var sx = (i * 137 + 31) % VIEW_W, sy = (i * 89 + 17) % Math.floor(VIEW_H * 0.7);
+    c.fillStyle = i % 3 ? 'rgba(180,190,220,0.5)' : 'rgba(230,235,255,0.8)';
+    c.fillRect(sx, sy, 1, 1);
+  }
+}
+
+function drawSky() {
+  if (!skyCanvas) buildSky();
+  wctx.drawImage(skyCanvas, 0, 0);
+  // slow twinkle: a couple of stars pulse with gameT
+  var tw = (gameT >> 3) % 5;
+  wctx.fillStyle = 'rgba(255,255,255,0.9)';
+  wctx.fillRect((tw * 61 + 23) % VIEW_W, (tw * 47 + 11) % 120, 1, 1);
+}
+
+// ── HUD: the original bottom panel, native 640x80 ────────────────────────────
+// Layout mirrors the reference UI (320x37, drawn here at 2x): skill-name word
+// and OUT / IN / TIME info line on top, then release-rate / skill / pause /
+// nuke buttons with tiny counts, then a live minimap on the right.
+var HUD_Y = H - HUDH;
+var HUD_BTNS = ['minus', 'plus', 'climber', 'floater', 'exploder', 'blocker', 'builder', 'basher', 'miner', 'digger', 'pause', 'nuke'];
+function hudBtnRect(i) { return { x: 4 + i * 32, y: HUD_Y + 28, w: 30, h: 46 }; }
+var MINIMAP = { x: 394, y: HUD_Y + 28, w: 242, h: 46 };
+
+function minimapScale() { return Math.min(MINIMAP.w / worldW, MINIMAP.h / LEVEL_H); }
+
+function drawHUD() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, HUD_Y, W, HUDH);
+  ctx.fillStyle = '#555'; ctx.fillRect(0, HUD_Y, W, 2);
+  var iy = HUD_Y + 5;
+  // current skill name (or the one being hovered in the panel)
+  drawWorkName(ctx, selSkill, 6, iy);
+  // OUT n  IN n%  TIME m-ss
+  var alive = 0;
+  for (var i = 0; i < lems.length; i++) if (!lems[i].dead && !lems[i].saved) alive++;
+  drawInfoWord(ctx, 'OUT', 156, iy);
+  drawGreenText(ctx, String(alive), 202, iy, 10, 20);
+  var pct = Math.round(saved * 100 / LEVEL_DEFS[curLevel].lem);
+  drawInfoWord(ctx, 'IN', 286, iy);
+  drawGreenText(ctx, pct + '%', 332, iy, 10, 20);
+  var rem = Math.max(0, LEVEL_DEFS[curLevel].time * TICKS_PER_SEC - gameT);
+  var remSec = Math.floor(rem / TICKS_PER_SEC);
+  var timeStr = Math.floor(remSec / 60) + '-' + ('0' + (remSec % 60)).slice(-2);
+  drawInfoWord(ctx, 'TIME', 476, iy);
+  drawGreenText(ctx, timeStr, 524, iy, 10, 20);
+  // buttons
+  for (i = 0; i < HUD_BTNS.length; i++) {
+    var r = hudBtnRect(i), name = HUD_BTNS[i];
+    if (name === 'pause' && paused) {
+      ctx.save(); ctx.filter = 'brightness(1.6)';
+      drawButtonIcon(ctx, name, r.x, r.y);
+      ctx.restore();
+    } else {
+      drawButtonIcon(ctx, name, r.x, r.y);
+    }
+    // counts: rate on -/+, remaining uses on skills
+    var count = null;
+    if (name === 'minus') count = LEVEL_DEFS[curLevel].release;
+    else if (name === 'plus') count = rate;
+    else if (i >= 2 && i <= 9) count = skillsLeft[i - 2];
+    if (count !== null) drawTinyNum(ctx, count, r.x + (String(count).length > 1 ? 4 : 10), r.y + 3, 2);
+  }
+  // selection frame on the active skill
+  var sr = hudBtnRect(selSkill + 2);
+  if (IMG['selframe']) ctx.drawImage(IMG['selframe'], 0, 0, 17, 25, sr.x - 2, sr.y - 2, 34, 50);
+  else { ctx.strokeStyle = '#fff'; ctx.strokeRect(sr.x - 1.5, sr.y - 1.5, 33, 49); }
+  // minimap
+  ctx.fillStyle = '#0a0a14'; ctx.fillRect(MINIMAP.x, MINIMAP.y, MINIMAP.w, MINIMAP.h);
+  ctx.strokeStyle = '#444'; ctx.strokeRect(MINIMAP.x + 0.5, MINIMAP.y + 0.5, MINIMAP.w - 1, MINIMAP.h - 1);
+  if (terrainCanvas) {
+    var s = minimapScale();
+    var mw = Math.round(worldW * s), mh = Math.round(LEVEL_H * s);
+    var mx = MINIMAP.x + Math.floor((MINIMAP.w - mw) / 2), my = MINIMAP.y + Math.floor((MINIMAP.h - mh) / 2);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(terrainCanvas, 0, 0, worldW, LEVEL_H, mx, my, mw, mh);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#4f4';
+    for (i = 0; i < lems.length; i++) {
+      var l = lems[i];
+      if (l.dead || l.saved) continue;
+      ctx.fillRect(mx + Math.round(l.x * s), my + Math.round(l.y * s) - 1, 1, 2);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.strokeRect(mx + camX * s + 0.5, my + 0.5, VIEW_W * s, mh - 1);
+  }
+}
+
+function drawPops() {
+  for (var i = 0; i < pops.length; i++) {
+    var p = pops[i]; p.t++;
+    var r = p.t * 1.6, a = Math.max(0, 1 - p.t / 20);
+    wctx.fillStyle = 'rgba(255,' + Math.round(150 + 100 * a) + ',80,' + (0.4 + 0.3 * a) + ')';
+    wctx.beginPath(); wctx.arc(p.x - camX, p.y - camY, r, 0, 6.283); wctx.fill();
+    wctx.fillStyle = 'rgba(255,255,200,' + (0.5 * a) + ')';
+    wctx.beginPath(); wctx.arc(p.x - camX, p.y - camY, r * 0.55, 0, 6.283); wctx.fill();
+    if (p.t > 20) { pops.splice(i, 1); i--; }
+  }
+  for (i = 0; i < debris.length; i++) {
+    var d = debris[i]; d.t++;
+    d.x += d.vx; d.y += d.vy; d.vy += 0.18;
+    wctx.globalAlpha = Math.max(0, 1 - d.t / 26);
+    wctx.fillStyle = d.color;
+    wctx.fillRect(Math.round(d.x - camX), Math.round(d.y - camY), 1, 1);
+    if (d.t > 26) { debris.splice(i, 1); i--; }
+  }
+  wctx.globalAlpha = 1;
+}
+
+// ── Main menu (original art: rock background, logo, sign sprites) ─────────────
+// menuBackground.png is 794x480: center-crop to 640x480, no scaling.
+var MENUBG_SX = 77;
+
+function levelRating(idx) {
+  var k = LEVEL_DEFS[idx].key;
+  return k.indexOf('tricky') === 0 ? 1 : k.indexOf('taxing') === 0 ? 2 : 0;
+}
+var RATING_NAMES = ['Fun', 'Tricky', 'Taxing'];
+
+function drawMenuBg(c) {
+  var bg = IMG['menubg'];
+  if (bg) c.drawImage(bg, MENUBG_SX, 0, W, H, 0, 0, W, H);
+  else { c.fillStyle = '#180c04'; c.fillRect(0, 0, W, H); }
+}
+
+// shared by drawMenu and the mouse hit-test
+function menuRowRect(i) { return { x: 288, y: 218 + i * 24, w: 330, h: 22 }; }
+var MENU_PLAY_SIGN = { x: 30, y: 196, w: 222, h: 104 };
+var MENU_MODE_SIGN = { x: 30, y: 316, w: 222, h: 104 };
+
+function drawMenuLem(c, t, x, y, dirLeft, scale) {
+  var walk = S.walk;
+  var cell = walk[Math.floor(t / 90) % walk.length];
+  c.save();
+  if (dirLeft) { c.translate(x + 16 * scale, y); c.scale(-scale, scale); }
+  else { c.translate(x, y); c.scale(scale, scale); }
+  c.drawImage(cell, 0, 0);
+  c.restore();
+}
+
+function drawMenu() {
+  var t = performance.now() - menuAnimStart;
+  drawMenuBg(ctx);
+  if (IMG['logo']) ctx.drawImage(IMG['logo'], Math.floor((W - 550) / 2), 12);
+  else drawText(ctx, 'LEMMINGS', W / 2 - textWidth('LEMMINGS') / 2, 60, 1);
+  // signs: "1 PLAYER" starts the selected level; the mode sign shows its rating
+  if (IMG['player1']) ctx.drawImage(IMG['player1'], 0, 0, 512, 256, MENU_PLAY_SIGN.x, MENU_PLAY_SIGN.y, MENU_PLAY_SIGN.w, MENU_PLAY_SIGN.h);
+  var selIdx = DISPLAY_ORDER[menuSel];
+  if (IMG['modesigns']) ctx.drawImage(IMG['modesigns'], 0, levelRating(selIdx) * 256, 512, 256, MENU_MODE_SIGN.x, MENU_MODE_SIGN.y, MENU_MODE_SIGN.w, MENU_MODE_SIGN.h);
+  // level list in progression order
+  drawText(ctx, 'SELECT LEVEL', 290, 186, 0.75);
+  for (var i = 0; i < DISPLAY_ORDER.length; i++) {
+    var idx = DISPLAY_ORDER[i];
+    var r = menuRowRect(i);
+    var locked = i >= unlocked;
+    var label = (i + 1) + ' ' + LEVEL_DEFS[idx].name;
+    ctx.save();
+    if (locked) ctx.globalAlpha = 0.32;
+    else if (i !== menuSel) ctx.globalAlpha = 0.75;
+    drawText(ctx, label, r.x + 30, r.y + 4, 0.5);
+    ctx.restore();
+    if (i === menuSel && !locked) drawMenuLem(ctx, t, r.x + 2, r.y + 2, false, 1);
+  }
+  drawText(ctx, 'ENTER PLAY - ARROWS SELECT', W / 2 - textWidth('ENTER PLAY - ARROWS SELECT', 0.5) / 2, 452, 0.5);
+  // lemmings marching along the bottom of the rock face
+  for (i = 0; i < 5; i++) {
+    var lx = ((t * 0.05 + i * 140) % (W + 80)) - 40;
+    drawMenuLem(ctx, t + i * 137, lx, 412, false, 2);
+  }
+}
+
+// ── Level briefing (recomposed natively in the original's style) ──────────────
+function drawBrief() {
+  var ld = LEVEL_DEFS[curLevel];
+  drawMenuBg(ctx);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
+  // level preview strip on navy, like the original info screens
+  ctx.fillStyle = '#0c0c34'; ctx.fillRect(0, 56, W, 152);
+  if (terrainCanvas) {
+    var s = Math.min(600 / worldW, 140 / LEVEL_H);
+    var pw = Math.round(worldW * s), ph = Math.round(LEVEL_H * s);
+    var px = Math.floor((W - pw) / 2), py = 56 + Math.floor((152 - ph) / 2);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(terrainCanvas, 0, 0, worldW, LEVEL_H, px, py, pw, ph);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
+    // trapdoor / exit markers (at the enter/escape points)
+    ctx.fillStyle = '#6cf'; ctx.fillRect(px + Math.round((trapX + TRAP_ENTER_X) * s) - 1, py + Math.round(trapY * s) - 1, 3, 3);
+    ctx.fillStyle = '#fd4'; ctx.fillRect(px + Math.round((doorX + DOOR_ESC_X) * s) - 1, py + Math.round((doorY + DOOR_ESC_Y) * s) - 1, 3, 3);
+  }
+  // colored info lines (lemm_font is green; hue-rotate for the other colors)
+  var cx = W / 2;
+  var line1 = 'Level ' + (progressionPos(curLevel) + 1) + '  ' + ld.name;
+  drawText(ctx, line1, cx - textWidth(line1, 0.75) / 2, 232, 0.75, 'hue-rotate(240deg) saturate(1.6)');
+  var lines = [
+    ['Number of Lemmings ' + ld.lem, 'hue-rotate(120deg)'],
+    [Math.round(ld.save * 100 / ld.lem) + '% to be saved', ''],
+    ['Release Rate ' + ld.release, 'hue-rotate(300deg) saturate(1.4)'],
+    ['Time ' + Math.round(ld.time / 60) + ' Minutes', 'hue-rotate(60deg)'],
+    ['Rating ' + RATING_NAMES[levelRating(curLevel)], 'hue-rotate(180deg) saturate(1.4)']
+  ];
+  for (var i = 0; i < lines.length; i++) {
+    drawText(ctx, lines[i][0], cx - textWidth(lines[i][0], 0.75) / 2, 278 + i * 30, 0.75, lines[i][1]);
+  }
+  var hint = 'CLICK OR ENTER TO BEGIN - ESC MENU';
+  if ((performance.now() >> 9) & 1) drawText(ctx, hint, cx - textWidth(hint, 0.5) / 2, 448, 0.5);
+}
+
+// ── Results screen (original art + pink numbers + Continue/Retry/Menu) ────────
+// results/buttons.png: 144x25 cells - Continue (y0 idle / y25 hover),
+// Menu (y50/y75), Retry (y100/y125).
+var RESBTN_SRC = { CONTINUE: 0, MENU: 50, RETRY: 100 };
+
+function resultButtons() { return resultWon ? ['RETRY', 'CONTINUE', 'MENU'] : ['RETRY', 'MENU']; }
+function resultBtnRect(i) {
+  var n = resultButtons().length;
+  var total = n * 144 + (n - 1) * 40;
+  return { x: Math.floor((W - total) / 2) + i * 184, y: 420, w: 144, h: 25 };
+}
+
+function drawResult() {
+  var img = IMG['res_' + resultKind];
+  if (img) {
+    // scale the full 794x480 art down so no side text is clipped
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, 0, 0, W, H);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
+  } else { ctx.fillStyle = '#041004'; ctx.fillRect(0, 0, W, H); }
+  // values next to the baked "You needed:" / "You rescued:" labels
+  var total = LEVEL_DEFS[curLevel].lem;
+  var pink = 'hue-rotate(180deg) saturate(1.4)';
+  drawText(ctx, Math.round(levelSave() * 100 / total) + '%', 404, 116, 0.75, pink);
+  drawText(ctx, Math.round(saved * 100 / total) + '%', 404, 146, 0.75, pink);
+  var btns = resultButtons(), rb = IMG['resbuttons'];
+  for (var i = 0; i < btns.length; i++) {
+    var r = resultBtnRect(i);
+    if (rb) ctx.drawImage(rb, 0, RESBTN_SRC[btns[i]] + (i === resultSel ? 25 : 0), 144, 25, r.x, r.y, r.w, r.h);
+    else {
+      ctx.fillStyle = i === resultSel ? '#ffd54a' : '#88a';
+      drawText(ctx, btns[i], r.x, r.y, 0.75);
+    }
+  }
+}
+
+// cursor.png: 29x29 frames stacked - LEFT y0, RIGHT y29, FOCUS y58, CROSS y87
+function drawCursor() {
+  var img = IMG['cursor'];
+  var focus = (mode === 'play' || mode === 'outro') && mouseY < HUD_Y && lemAtPoint(worldMX(), worldMY());
+  if (img) {
+    ctx.drawImage(img, 0, focus ? 58 : 87, 29, 29, mouseX - 14, mouseY - 14, 29, 29);
+  } else {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(mouseX, mouseY - 10, 2, 22); ctx.fillRect(mouseX - 10, mouseY, 22, 2);
+  }
+}
+
+function render() {
+  if (mode === 'loading') {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    drawText(ctx, 'LOADING', W / 2 - textWidth('LOADING', 1) / 2, H / 2 - 12, 1);
+    return;
+  }
+  if (mode === 'menu') { drawMenu(); drawCursor(); return; }
+  if (mode === 'brief') { drawBrief(); drawCursor(); return; }
+  if (mode === 'result') { drawResult(); drawCursor(); return; }
+  // play / outro: 1x world blitted 2x, lemmings interpolated on the native
+  // layer, then the native-res HUD + cursor
+  drawSky();
+  drawTerrain();
+  drawDoor();
+  drawTrapdoor();
+  drawBricks();
+  drawPops();
+  ctx.drawImage(worldCanvas, 0, 0, VIEW_W, VIEW_H, 0, 0, W, H - HUDH);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, H - HUDH); ctx.clip();
+  for (var i = 0; i < lems.length; i++) drawLem(lems[i]);
+  ctx.restore();
+  drawHUD();
+  drawCursor();
+}
+
+// mouse position in world coordinates (view area only)
+function worldMX() { return (mouseX >> 1) + camX; }
+function worldMY() { return (mouseY >> 1) + camY; }
+
+function lemAtPoint(wx, wy) {
+  for (var i = 0; i < lems.length; i++) {
+    var l = lems[i];
+    if (l.dead || l.saved) continue;
+    var sx = l.x - 8, sy = l.y - 16;
+    if (wx >= sx - 1 && wx <= sx + 17 && wy >= sy - 1 && wy <= sy + 17) return true;
+  }
+  return false;
+}
+
+// ── Level flow ────────────────────────────────────────────────────────────────
+function loadLevel(n) {
+  curLevel = n;
+  buildTerrain(LEVEL_DEFS[n]);
+  lems = []; bricks = []; pops = []; debris = [];
+  released = 0; spawnT = 0; saved = 0; gameT = 0;
+  rate = LEVEL_DEFS[n].release;
+  paused = false;
+  skillsLeft = LEVEL_DEFS[n].skills.slice();
+  selLem = -1; selSkill = 0;
+  trapAnimT = 0;
+  mode = 'brief';
+}
+
+function startPlay() {
+  sfx('letsgo');
+  mode = 'play';
+}
+
+// Nuke (reference apocalypsis): the hatch stops releasing - unspawned
+// lemmings count as lost - and every live lemming, blockers included, gets
+// its countdown; the level ends once they have all gone up.
+function nuke() {
+  released = LEVEL_DEFS[curLevel].lem;   // no more spawns
+  var n = 0;
+  for (var i = 0; i < lems.length; i++) {
+    var l = lems[i];
+    if (l.dead || l.saved || l.state === 'escape') continue;
+    if (l.skill !== 2) { l.skill = 2; l.fuseT = 6 + (n++) * 2; }
+  }
+}
+
+// Continue to the next level in progression order (menu after the last one).
+function continueAfterWin() {
+  var pos = progressionPos(curLevel);
+  if (pos + 1 >= DISPLAY_ORDER.length) { mode = 'menu'; menuSel = 0; return; }
+  loadLevel(DISPLAY_ORDER[pos + 1]);
+  sfx('blip');
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+function canvasPos(e) {
+  var r = canvas.getBoundingClientRect();
+  return { x: Math.floor((e.clientX - r.left) / r.width * W), y: Math.floor((e.clientY - r.top) / r.height * H) };
+}
+
+canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+function pointIn(p, r) { return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h; }
+
+canvas.addEventListener('mousedown', function(e) {
+  ensureAudio();
+  var p = canvasPos(e);
+  if (mode === 'menu') {
+    if (pointIn(p, MENU_PLAY_SIGN)) {
+      if (menuSel < unlocked) { sfx('click'); loadLevel(DISPLAY_ORDER[menuSel]); }
+      return;
+    }
+    for (var i = 0; i < DISPLAY_ORDER.length; i++) {
+      if (pointIn(p, menuRowRect(i))) {
+        menuSel = i;
+        if (i < unlocked) { sfx('click'); loadLevel(DISPLAY_ORDER[i]); }
+        return;
+      }
+    }
+    return;
+  }
+  if (mode === 'brief') { startPlay(); return; }
+  if (mode === 'result') {
+    var btns = resultButtons();
+    for (var i = 0; i < btns.length; i++) {
+      if (pointIn(p, resultBtnRect(i))) { resultSel = i; sfx('click'); activateResultButton(); return; }
+    }
+    return;
+  }
+  if (mode !== 'play' && mode !== 'outro') return;
+  if (p.y >= HUD_Y) {
+    // bottom panel: buttons, then the minimap
+    for (var i = 0; i < HUD_BTNS.length; i++) {
+      if (!pointIn(p, hudBtnRect(i))) continue;
+      var name = HUD_BTNS[i];
+      if (name === 'minus') { rate = Math.max(LEVEL_DEFS[curLevel].release, rate - 5); sfx('blip'); }
+      else if (name === 'plus') { rate = Math.min(99, rate + 5); sfx('blip'); }
+      else if (name === 'pause') { paused = !paused; sfx('blip'); }
+      else if (name === 'nuke') { nuke(); sfx('blip'); }
+      else { selSkill = i - 2; sfx('blip'); }
+      return;
+    }
+    if (pointIn(p, MINIMAP) && terrainCanvas) {
+      var s = minimapScale();
+      var mw = Math.round(worldW * s);
+      var mx = MINIMAP.x + Math.floor((MINIMAP.w - mw) / 2);
+      camX = clamp(Math.round((p.x - mx) / s) - VIEW_W / 2, 0, Math.max(0, worldW - VIEW_W));
+    }
+    return;
+  }
+  if (e.button === 2) { cycleSel(); return; }
+  // world click: nearest lemming in world coordinates
+  var wx = (p.x >> 1) + camX, wy = (p.y >> 1) + camY;
+  var best = -1, bd = 22 * 22;
+  for (var i = 0; i < lems.length; i++) {
+    var l = lems[i];
+    if (l.dead) continue;
+    var dx = l.x - wx, dy = (l.y - 8) - wy;
+    var d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (best < 0) return;
+  var target = lems[best];
+  if (selSkill >= 0 && !target.dead) { applySkill(target, selSkill); return; }
+  selLem = target.num;
+});
+
+function activateResultButton() {
+  var b = resultButtons()[resultSel];
+  if (b === 'RETRY') { loadLevel(curLevel); }
+  else if (b === 'CONTINUE') { continueAfterWin(); }
+  else { mode = 'menu'; menuSel = Math.max(0, progressionPos(curLevel)); menuAnimStart = performance.now(); }
+}
+
+canvas.addEventListener('mousemove', function(e) {
+  var p = canvasPos(e); mouseX = p.x; mouseY = p.y;
+});
+
+canvas.addEventListener('wheel', function(e) {
+  ensureAudio();
+  e.preventDefault();
+  if (mode === 'play' || mode === 'outro') { selSkill = (selSkill + (e.deltaY > 0 ? 1 : 7)) % 8; sfx('blip'); }
+}, { passive: false });
+
+function backToMenu() {
+  mode = 'menu';
+  menuSel = Math.max(0, progressionPos(curLevel));
+  menuAnimStart = performance.now();
+}
+
+window.addEventListener('keydown', function(e) {
+  ensureAudio();
+  var k = e.key;
+  if (mode === 'menu') {
+    if (k === 'ArrowUp' || k === 'ArrowLeft') { menuSel = Math.max(0, menuSel - 1); sfx('click'); e.preventDefault(); return; }
+    if (k === 'ArrowDown' || k === 'ArrowRight') { menuSel = Math.min(DISPLAY_ORDER.length - 1, menuSel + 1); sfx('click'); e.preventDefault(); return; }
+    if (k === 'Enter' || k === ' ') {
+      e.preventDefault();
+      if (menuSel < unlocked) { sfx('click'); loadLevel(DISPLAY_ORDER[menuSel]); }
+      return;
+    }
+    if (k >= '1' && k <= '9') { var i = +k - 1; if (i < DISPLAY_ORDER.length && i < unlocked) { sfx('click'); loadLevel(DISPLAY_ORDER[i]); } return; }
+    return;   // Escape: menu is the root screen inside the X11 window
+  }
+  if (mode === 'brief') {
+    if (k === 'Enter' || k === ' ') { e.preventDefault(); startPlay(); return; }
+    if (k === 'Escape') { backToMenu(); return; }
+    return;
+  }
+  if (mode === 'result') {
+    var n = resultButtons().length;
+    if (k === 'ArrowLeft') { resultSel = (resultSel + n - 1) % n; sfx('click'); return; }
+    if (k === 'ArrowRight') { resultSel = (resultSel + 1) % n; sfx('click'); return; }
+    if (k === 'Enter' || k === ' ') { e.preventDefault(); sfx('click'); activateResultButton(); return; }
+    if (k === 'Escape') { backToMenu(); return; }
+    return;
+  }
+  // play / outro
+  if (k >= '1' && k <= '8') { selSkill = +k - 1; sfx('blip'); return; }
+  if (k === 'ArrowLeft') {
+    if (e.shiftKey) rate = Math.max(LEVEL_DEFS[curLevel].release, rate - 1);
+    else camX = Math.max(0, camX - 12);
+    return;
+  }
+  if (k === 'ArrowRight') {
+    if (e.shiftKey) rate = Math.min(99, rate + 1);
+    else camX = Math.min(Math.max(0, worldW - VIEW_W), camX + 12);
+    return;
+  }
+  if (k === ' ') { paused = !paused; sfx('blip'); e.preventDefault(); return; }
+  if (k === 'Backspace') { nuke(); return; }
+  if (k === 'Escape') { backToMenu(); return; }
+  if (k === 'f') { fast = fast === 2 ? 1 : 2; return; }
+  if (k === 'm') { muted = !muted; if (!muted) ensureAudio(); return; }
+});
+
+function cycleSel() {
+  if (!lems.length) return;
+  var idx = 0;
+  for (var i = 0; i < lems.length; i++) if (lems[i].num === selLem) { idx = i; break; }
+  var guard = 0;
+  do { idx = (idx + 1) % lems.length; guard++; } while (guard < lems.length && (lems[idx].dead || lems[idx].saved));
+  selLem = lems[idx].num;
+  sfx('blip');
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+var lastT = 0, acc = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  updateMusic();
+  if ((mode === 'play' || mode === 'outro') && !paused) {
+    var dt = Math.min(ts - lastT, 250); lastT = ts;
+    acc += dt;
+    while (acc >= TICK_MS / fast) { tick(); acc -= TICK_MS / fast; }
+    renderAlpha = Math.min(1, acc / (TICK_MS / fast));
+  } else { lastT = ts; renderAlpha = 1; }
+  render();
+}
+requestAnimationFrame(function(ts) { lastT = ts; requestAnimationFrame(loop); });
+
+function onAllLoaded() {
+  buildSpriteTable();
+  loadSounds();
+  loadMusic();
+  menuAnimStart = performance.now();
+  mode = 'menu';
+}
+
+loadAssets();
+})();
+</script>
+</body>
+</html>
