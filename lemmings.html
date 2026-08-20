@@ -654,24 +654,31 @@ function splat(l) { killLem(l); l.state = 'splat'; l.stateT = 0; sfx('splat'); }
 // to our coordinates (l.x = sprite center, l.y = feet row = ref pos + (8,16)).
 // One tick = one reference animation frame (12 fps).
 
-// Walker: rise 2, settle down up to 3 -> climbs <=2, descends <=1 net;
-// deeper drops become falls, feet-row contact ahead is a wall.
+// Walker: steps up contiguous rises of 1-6px (the original walker's hop),
+// walks down dips of up to 3px, and falls beyond that. Anything 7px or
+// taller is a wall: turn around - or start climbing with the climber skill.
+// A floating bridge overhead is not an obstacle; lemmings walk beneath it
+// and step onto it only where it meets the ground.
 function updateWalk(l) {
   l.x += l.dir;
-  l.y -= 2;
   var cx = Math.round(l.x), fy = Math.floor(l.y);
-  if (solidAt(cx, fy - 1)) {   // wall at the feet row
-    l.x -= l.dir; l.y += 2;
+  var rise = 0;
+  while (rise < 7 && solidAt(cx, fy - 1 - rise)) rise++;
+  if (rise >= 7) {   // wall
     if (l.skill === 0) { l.state = 'climb'; l.climbT = 0; l.stateT = 0; return; }
-    l.dir = -l.dir;
+    l.x -= l.dir; l.dir = -l.dir;
     return;
   }
-  var down = columnGap(cx, fy, 4) - 1;   // rows down to ground (0..3), 4 = none
-  if (down >= 4) {
-    l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0;
-    return;
+  if (rise > 0) {
+    l.y = fy - rise;   // step up onto the rise
+  } else {
+    var down = columnGap(cx, fy, 4) - 1;   // rows down to ground (0..3), 4 = none
+    if (down >= 4) {
+      l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0;
+      return;
+    }
+    l.y = fy + down;
   }
-  l.y = fy + down;
   // blockers turn walkers around (reference blocking field is ~10px wide)
   for (var i = 0; i < lems.length; i++) {
     var b = lems[i];
