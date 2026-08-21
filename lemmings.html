@@ -904,9 +904,19 @@ function updateBash(l) {
     sfx('bash');
   }
   if (frame % 16 < 7) l.x += l.dir;
-  // the reference reads collisionFloor here and then never uses it, so its
-  // bashers hang in mid-air once they cut their own floor away - we drop
-  if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+  followFloor(l);
+}
+
+// The reference reads collisionFloor for bashers and miners and then never
+// uses them, so its diggers-sideways hang in mid-air once they cut their own
+// floor away. We do drop them - but with the walker's tolerance, not a single
+// pixel test: lattice terrain has 3px holes that a walker steps down through,
+// and a basher stricter than a walker falls straight out of a crystal mesh
+// after one pixel.
+function followFloor(l) {
+  var down = columnGap(Math.round(l.x), Math.floor(l.y), 4) - 1;
+  if (down >= 4) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; return; }
+  if (down > 0) l.y = Math.floor(l.y) + down;
 }
 
 // Miner: one pick swing per 24-frame cycle - carves the slanted slice from
@@ -937,7 +947,7 @@ function updateMine(l) {
   }
   if (frame === 17) {
     l.x += l.dir * 2; l.y += 1;
-    if (!solidBelow(l, 0)) { l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0; }
+    followFloor(l);
   }
 }
 
