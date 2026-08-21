@@ -62,8 +62,6 @@ CC0 1.0 by pzUH / Game Art 2D (https://opengameart.org/content/cat-dog-free-spri
 
 MIT by Carlota Catot Bragós (https://github.com/carlotacb/Lemmings),
 Copyright (c) 2018 Carlota Catot Bragós, MIT license.
-  levels/<key>/map.png   terrain texture recreations of the iconic
-                         Fun/Tricky/Taxing maps from the original game
   lemming_anim.png       lemming skill animation sheet
   menu/                  logo.png, menuBackground.png, modeSpriteSheet.png,
                          player1Sprite.png (main-menu art)
@@ -75,6 +73,27 @@ Copyright (c) 2018 Carlota Catot Bragós, MIT license.
                          (exit door / entrance trapdoor animations)
   results/               perfect.png, good.png, justInTick.png, disaster.png,
                          buttons.png (post-level result screens)
+
+Extracted from the original DOS release
+---------------------------------------
+Lemmings is Copyright (c) 1991 DMA Design / Psygnosis. The following are
+converted from the site owner's own copy of the DOS release by
+tools/lemmings-extract.js, which reads the game's LEVEL00x.DAT,
+ODDTABLE.DAT, GROUNDxO.DAT, VGAGRx.DAT and VGASPECx.DAT files:
+
+  levels.json            all 120 levels' parameters, objects and steel areas
+  levels/<key>/map.png   composited level terrain (1584x160)
+  levels/<key>/mask.png  solidity in alpha, indestructible steel in red
+  tilesets/N-objects.png the five graphics sets' object sprite sheets
+                         (entrances, exits, water, traps, one-way walls)
+
+  menu/mayhem_sign.png   Mayhem rating board, composed here from the Taxing
+                         board and the game's own font - the original sign
+                         sheet only carries Fun, Tricky and Taxing
+
+This material is not licensed for redistribution; it is included at the site
+owner's request. The extraction tools in tools/ are original work and carry no
+such restriction.
 
 NOTE: sfx/ contains the original Lemmings sound-effect WAV rips
 (DMA Design) as distributed in the carlotacb/Lemmings repository;
