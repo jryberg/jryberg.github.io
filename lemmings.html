@@ -40,6 +40,8 @@ var TICK_MS = 1000 / 12;
 var TICKS_PER_SEC = 1000 / TICK_MS;
 var FUSE_TICKS = 60;       // bomber countdown: 5 s (reference MAX_SEC)
 var FATAL_FALL = 65;       // reference FATAL_FALLING_DISTANCE
+var CHUTE_FREEFALL = 8;    // ticks of 2 px/tick freefall before the chute opens (16 px)
+var CHUTE_OPEN = 4;        // ticks the chute takes to open (the lemming hangs)
 var canvas = document.getElementById('c');
 var ctx = canvas.getContext('2d');
 canvas.width = W; canvas.height = H;
@@ -600,6 +602,7 @@ function addLem(x, y, dir) {
     x: x, y: y, px: x, py: y, dir: dir, state: 'fall', stateT: 0,
     skill: -1, skillT: 0, fuseT: 0, vy: 0,
     fallFrom: y, climbT: 0, buildN: 0, workT: 0,
+    canClimb: false, canFloat: false,
     dead: false, saved: false, num: released, anim: 0
   };
   lems.push(l);
@@ -611,11 +614,6 @@ function addLem(x, y, dir) {
 // a 1px slit never counts as "no ground" and never forms a wall.
 function groundAt(x, y) { return solidAt(x - 1, y) || solidAt(x, y); }
 function solidBelow(l, xOff) { return groundAt(Math.round(l.x + xOff), Math.ceil(l.y)); }
-function solidAhead(l) {
-  var x = Math.floor(l.x + l.dir * 8);
-  for (var yy = Math.floor(l.y) - 15; yy <= Math.floor(l.y) - 4; yy++) if (solidAt(x, yy)) return true;
-  return false;
-}
 // columnGap(x, yTop, h): distance down to the first solid row, h+1 = none
 // (mirrors the reference collisionFloor sampling, two-pixel pair).
 function columnGap(x, yTop, height) {
@@ -635,10 +633,14 @@ function applySkill(l, s) {
   if (s >= 3 && (l.state === 'fall' || l.state === 'climb' || l.state === 'ledge')) return;
   if (l.state === 'block' && s !== 2) return;   // a blocker can only be bombed free
   skillsLeft[s]--;
-  l.skill = s; l.skillT = 0; l.workT = 0; l.buildN = 0;
+  l.skillT = 0; l.workT = 0; l.buildN = 0;
+  // climber and floater are permanent abilities in the reference (their Job
+  // objects never expire), so they live in their own flags and survive both
+  // landing and any later job assignment - everything else is the current job
+  if (s >= 2) l.skill = s;
   switch (s) {
-    case 0: break;   // climber: starts climbing when it next walks into a wall
-    case 1: if (l.state === 'fall') l.stateT = 0; break;   // floater: chute deploys in the fall
+    case 0: l.canClimb = true; break;   // starts climbing when it next walks into a wall
+    case 1: l.canFloat = true; if (l.state === 'fall') l.stateT = 0; break;   // chute deploys in the fall
     case 2: l.fuseT = FUSE_TICKS; break;   // bomber: 5s countdown, keeps working meanwhile
     case 3: l.state = 'block'; l.stateT = 0; break;
     case 4: l.state = 'build'; l.stateT = 0; break;
@@ -668,7 +670,10 @@ function updateWalk(l) {
   var rise = 0;
   while (rise < 7 && groundAt(cx, fy - 1 - rise)) rise++;
   if (rise >= 7) {   // wall
-    if (l.skill === 0) { l.state = 'climb'; l.climbT = 0; l.stateT = 0; return; }
+    if (l.canClimb) {
+      l.x -= l.dir;   // back out of the wall first, like the reference's undone step
+      l.state = 'climb'; l.climbT = 0; l.stateT = 0; return;
+    }
     l.x -= l.dir; l.dir = -l.dir;
     return;
   }
@@ -697,13 +702,16 @@ function updateWalk(l) {
 }
 
 // Faller: constant 2 px/tick; a fall of 65+ px is fatal. Floaters freefall
-// for 4 ticks, hang while the chute opens (4 ticks), then sail gently down;
-// with the chute deployed the fall is never fatal.
+// 16 px first (the original's threshold, so short survivable hops never flash
+// the umbrella), hang while the chute opens, then sail gently down; with the
+// chute deployed the fall is never fatal. The reference clone instead runs its
+// 4 falling frames and opens the chute on *any* drop over 2 px - even one it
+// has already landed from - which is a quirk of that port, not the original.
 function doFall(l) {
   l.stateT++;
-  var isFloat = l.skill === 1;
+  var isFloat = l.canFloat;
   var vy = 2;
-  if (isFloat && l.stateT > 4) vy = l.stateT <= 8 ? 0 : 1;
+  if (isFloat && l.stateT > CHUTE_FREEFALL) vy = l.stateT <= CHUTE_FREEFALL + CHUTE_OPEN ? 0 : 1;
   // descend one pixel at a time: no tunnelling through thin ledges/bridges
   for (var i = 0; i < vy; i++) {
     l.y += 1;
@@ -711,7 +719,6 @@ function doFall(l) {
     if (solidBelow(l, 0)) {
       var fell = l.y - l.fallFrom;
       l.y = Math.floor(l.y);
-      if (isFloat && l.stateT > 4) l.skill = -1;   // chute consumed by a real fall
       if (fell >= FATAL_FALL && !isFloat) { splat(l); return; }
       l.state = 'walk'; l.stateT = 0;
       return;
@@ -719,22 +726,28 @@ function doFall(l) {
   }
 }
 
-// Climber: 1 px/tick up the wall; an overhang pushes it off (falls back
-// down); at the top it pulls up over the edge and walks on - same direction.
+// Climber: 1 px/tick up the wall. The reference checks exactly two pixels per
+// tick - terrain level with the head (ref pos.x+8, pos.y+1) is an overhang and
+// knocks the climber off the wall, and an empty pixel one column further into
+// the wall, 4 px above the feet (ref posBase.x+1, posBase.y-3), means the wall
+// has ended, so it pulls up over the edge.
 function updateClimb(l) {
   l.stateT++;
   l.y -= 1; l.climbT++;
-  if (solidAt(Math.round(l.x), Math.floor(l.y) - 16)) {
+  var cx = Math.round(l.x), fy = Math.floor(l.y);
+  if (groundAt(cx, fy - 15)) {                       // overhang above the head
     l.x -= l.dir * 2;
     l.state = 'fall'; l.fallFrom = l.y; l.stateT = 0;
     return;
   }
-  if (!solidAhead(l)) { l.state = 'ledge'; l.stateT = 0; }
+  if (!groundAt(cx + l.dir, fy - 4)) { l.state = 'ledge'; l.stateT = 0; }
 }
 
+// Ledging: the full 8-frame pull-up, then the reference's (3, -3) step that
+// plants the feet on top of the wall.
 function updateLedge(l) {
   l.stateT++;
-  if (l.stateT >= 4) {
+  if (l.stateT >= 8) {
     l.x += l.dir * 3; l.y -= 3;
     l.state = 'walk'; l.stateT = 0;
   }
@@ -982,14 +995,15 @@ function lemFrame(l) {
     case 'walk':
       return animIdx(l, S.walk);
     case 'fall':
-      if (l.skill === 1) {
-        if (l.stateT <= 4) return S.fall[l.stateT % 4];                   // freefall
-        if (l.stateT <= 8) return S.floatOpen[(l.stateT - 5) % 4];        // chute opening
-        return S.floatFall[(l.stateT - 9) % S.floatFall.length];          // sailing down
+      if (l.canFloat) {
+        var ft = l.stateT - CHUTE_FREEFALL;
+        if (ft <= 0) return S.fall[l.stateT % 4];                              // freefall
+        if (ft <= CHUTE_OPEN) return S.floatOpen[(ft - 1) % 4];                // chute opening
+        return S.floatFall[(ft - CHUTE_OPEN - 1) % S.floatFall.length];        // sailing down
       }
       return S.fall[Math.floor(l.stateT) % 4];
     case 'climb': return animIdx(l, S.climb);
-    case 'ledge': return S.ledge[Math.min(7, l.stateT * 2)];
+    case 'ledge': return S.ledge[Math.min(7, l.stateT)];
     case 'bomb':
       if (l.stateT < 16) return S.exploder[l.stateT];                     // oh no!
       return S.burning[Math.min(15, l.stateT - 16)];
@@ -1067,11 +1081,6 @@ function drawDoor() {
     else wctx.drawImage(img, DOOR_COL[type], (f + 2) * 32, 40, 32, x, y, 40, 32);
   } else {
     wctx.fillStyle = '#c8a850'; wctx.fillRect(x + 4, y + 8, 32, 24);
-  }
-  // glow when goal met
-  if ((mode === 'outro' && resultWon) || (saved >= levelSave() && gameT % 30 < 15)) {
-    wctx.fillStyle = 'rgba(255,240,180,0.3)';
-    wctx.fillRect(x + 8, y + 14, 24, 16);
   }
 }
 
